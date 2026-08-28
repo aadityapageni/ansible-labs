@@ -1,0 +1,44 @@
+---
+- name: Enable and start IIS
+  hosts: windows
+  tasks:
+    - name: Install IIS feature
+      ansible.windows.win_feature:
+        name: Web-Server
+        state: present
+
+    - name: Start IIS service
+      ansible.windows.win_service:
+        name: W3SVC
+        state: started
+
+    - name: Create index.html with hello world
+      ansible.windows.win_copy:
+        content: "yo mate"
+        dest: C:\inetpub\wwwroot\index.html
+
+    # - name: Allow HTTP through Windows Firewall
+    #   community.windows.win_firewall_rule:
+    #     name: Allow HTTP
+    #     localport: 80
+    #     action: allow
+    #     direction: in
+    #     protocol: tcp
+    #     state: present
+    #     enabled: yes
+
+    - name: Show Windows hostname
+      ansible.builtin.debug:
+        var: ansible_facts["hostname"]
+
+    - name: Show OS family
+      ansible.builtin.debug:
+        var: ansible_facts["os_family"]
+
+    - name: Show operating system
+      ansible.builtin.debug:
+        var: ansible_facts["distribution"]
+
+    - name: Show Current User
+      ansible.builtin.debug:
+        var: ansible_facts["env"]

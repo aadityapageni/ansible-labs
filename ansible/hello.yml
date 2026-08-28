@@ -1,0 +1,17 @@
+---
+- name: Write hello world to desktop
+  hosts: windows
+  tasks:
+    - name: Write hello world text file to desktop
+      ansible.windows.win_copy:
+        content: "hello world"
+        dest: "{{ ansible_facts['env'].USERPROFILE }}\\Desktop\\hello.txt"
+
+    - name: Create application directory
+      ansible.windows.win_file:
+        path: "{{ training_path }}"
+        state: directory
+
+    - name: Show host variable value
+      ansible.builtin.debug:
+        msg: "training_path for {{ inventory_hostname }} is {{ training_path }}"
