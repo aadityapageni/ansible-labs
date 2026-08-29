@@ -164,35 +164,35 @@ resource "azurerm_virtual_machine_extension" "custom_script" {
   ]
 }
 
-resource "azurerm_virtual_machine_extension" "openssh" {
-  name                       = "InstallOpenSSH"
-  virtual_machine_id         = azurerm_windows_virtual_machine.winrm.id
-  publisher                  = "Microsoft.Azure.OpenSSH"
-  type                       = "WindowsOpenSSH"
-  type_handler_version       = "3.0"
-  auto_upgrade_minor_version = true
+# resource "azurerm_virtual_machine_extension" "openssh" {
+#   name                       = "InstallOpenSSH"
+#   virtual_machine_id         = azurerm_windows_virtual_machine.winrm.id
+#   publisher                  = "Microsoft.Azure.OpenSSH"
+#   type                       = "WindowsOpenSSH"
+#   type_handler_version       = "3.0"
+#   auto_upgrade_minor_version = true
 
-  depends_on = [
-    azurerm_virtual_machine_extension.custom_script
-  ]
-}
+#   depends_on = [
+#     azurerm_virtual_machine_extension.custom_script
+#   ]
+# }
 
-resource "azurerm_virtual_machine_extension" "ssh_key" {
-  name                       = "CopySSHKey"
-  virtual_machine_id         = azurerm_windows_virtual_machine.winrm.id
-  publisher                  = "Microsoft.CPlat.Core"
-  type                       = "RunCommandWindows"
-  type_handler_version       = "1.0"
-  auto_upgrade_minor_version = true
+# resource "azurerm_virtual_machine_extension" "ssh_key" {
+#   name                       = "CopySSHKey"
+#   virtual_machine_id         = azurerm_windows_virtual_machine.winrm.id
+#   publisher                  = "Microsoft.CPlat.Core"
+#   type                       = "RunCommandWindows"
+#   type_handler_version       = "1.0"
+#   auto_upgrade_minor_version = true
 
-  protected_settings = jsonencode({
-    script = [
-      "Add-Content 'C:\\ProgramData\\ssh\\administrators_authorized_keys' -Value '${var.ssh_public_key}' -Encoding UTF8",
-      "icacls.exe 'C:\\ProgramData\\ssh\\administrators_authorized_keys' /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F'"
-    ]
-  })
+#   protected_settings = jsonencode({
+#     script = [
+#       "Add-Content 'C:\\ProgramData\\ssh\\administrators_authorized_keys' -Value '${var.ssh_public_key}' -Encoding UTF8",
+#       "icacls.exe 'C:\\ProgramData\\ssh\\administrators_authorized_keys' /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F'"
+#     ]
+#   })
 
-  depends_on = [
-    azurerm_virtual_machine_extension.openssh
-  ]
-}
+#   depends_on = [
+#     azurerm_virtual_machine_extension.openssh
+#   ]
+# }
