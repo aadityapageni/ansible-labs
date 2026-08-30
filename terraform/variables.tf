@@ -25,4 +25,5 @@ variable "admin_password" {
 variable "ssh_public_key" {
   description = "SSH public key for OpenSSH"
   type        = string
+  default = null
 }

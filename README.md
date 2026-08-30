@@ -590,6 +590,60 @@ ansible-playbook -i inventory/windows.ini playbooks/iis.yml --ask-vault-pass
 
 > `ansible_password` is just a variable like any other — Ansible reads it from vault. Git now sees only the encrypted file.
 
+---
+
+## Jinja2 in 2 minutes
+
+Jinja2 is a templating engine. Ansible uses it to render config files with variables.
+
+### Before (hardcoded)
+
+`hello.yml`:
+```yaml
+- ansible.windows.win_copy:
+    content: "hello world"
+    dest: "{{ ansible_facts['env'].USERPROFILE }}\\Desktop\\hello.txt"
+```
+
+### After (template with variables)
+
+Create `templates/hello.txt.j2`:
+```jinja2
+Hello {{ ansible_facts['env'].COMPUTERNAME }}!
+
+User: {{ ansible_facts['env'].USERNAME }}
+Host: {{ inventory_hostname }}
+Date: {{ ansible_date_time.date }}
+```
+
+Update `hello.yml`:
+```yaml
+- ansible.windows.win_template:
+    src: templates/hello.txt.j2
+    dest: "{{ ansible_facts['env'].USERPROFILE }}\\Desktop\\hello.txt"
+```
+
+Result on VM:
+```
+Hello WEB-01!
+
+User: wakizu
+Host: student01
+Date: 2026-08-29
+```
+
+**Key Jinja2 features:**
+
+| Syntax | Example | Output |
+|--------|---------|--------|
+| Variable | `{{ variable }}` | `wakizu` |
+| Filter | `{{ name \| upper }}` | `WAKIZU` |
+| Default | `{{ x \| default("n/a") }}` | `n/a` if x is undefined |
+| Conditional | `{% if env == "dev" %}true{% endif %}` | `true` if dev |
+| Loop | `{% for i in list %}{{ i }}{% endfor %}` | all items |
+
+> **Rule:** Put logic in variables, not templates. Keep templates simple.
+
 
 ---
 
