@@ -204,7 +204,7 @@ Troubleshoot order (teach this):
 Public IP → NSG → Windows Firewall → WinRM service → Listener → Certificate → Ansible
 ```
 
-Create `ansible/inventory/windows.ini`:
+Create `inventory/windows.ini`:
 
 ```ini
 [windows]
@@ -221,7 +221,7 @@ ansible_psrp_cert_validation=ignore
 
 Ad-hoc test:
 ```bash
-ansible -i ansible/inventory/windows.ini windows -m ansible.windows.win_ping
+ansible -i inventory/windows.ini windows -m ansible.windows.win_ping
 # winvm01 | SUCCESS => {"changed": false, "ping": "pong"}
 ```
 
@@ -240,7 +240,7 @@ nc -zv <IP> 5986
 ping <IP>   # although ICMP can be blocked
 ```
 
-Now do the same thing as a playbook instead of an ad-hoc command — `ansible/playbooks/ping.yml`:
+Now do the same thing as a playbook instead of an ad-hoc command — `playbooks/ping.yml`:
 ```yaml
 ---
 - name: Test Windows connectivity
@@ -251,7 +251,7 @@ Now do the same thing as a playbook instead of an ad-hoc command — `ansible/pl
 ```
 
 ```bash
-ansible-playbook -i ansible/inventory/windows.ini ansible/playbooks/ping.yml
+ansible-playbook -i inventory/windows.ini playbooks/ping.yml
 ```
 
 ---
@@ -364,7 +364,7 @@ ansible-playbook \
 Ansible reads `ansible.cfg` from the working directory (or `~/.ansible.cfg`, `/etc/ansible/ansible.cfg`). It sets defaults so you don't pass flags every time.
 
 ```ini
-# ansible/ansible.cfg
+# ansible.cfg
 [defaults]
 inventory = inventory/windows.ini
 interpreter_python = /usr/bin/python3
@@ -387,7 +387,7 @@ become = false
 
 ## Section 7 — Variables + Precedence
 
-in `ansible/playbook/hello.yml`
+in `playbook/hello.yml`
 ```yaml
 ---
 - name: Write hello world to desktop
@@ -411,7 +411,7 @@ ansible-playbook -i inventory/windows.ini playbooks/hello.yml
 
 ### Variable files
 
-`ansible/group_vars/windows.yml`:
+`group_vars/windows.yml`:
 ```yaml
 ---
 application_name: "Training IIS"
@@ -441,7 +441,7 @@ environment: "development"
         msg: "training_path for {{ inventory_hostname }} is {{ training_path }}"
 ```
 
-Start simple `ansible/playbooks/variables.yml`:
+Start simple `playbooks/variables.yml`:
 ```yaml
 ---
 - name: Variable demonstration
@@ -478,7 +478,7 @@ Start simple `ansible/playbooks/variables.yml`:
 
 ### Variable files
 
-`ansible/group_vars/windows.yml`:
+`group_vars/windows.yml`:
 ```yaml
 ---
 application_name: "Training IIS"
@@ -489,7 +489,7 @@ environment: "development"
 ```
 
 ```bash
-ansible-playbook -i ansible/inventory/windows.ini ansible/playbooks/variables.yml
+ansible-playbook -i inventory/windows.ini playbooks/variables.yml
 ```
 
 Playbook reads them automatically (no `-e` needed).
@@ -514,7 +514,7 @@ Defaults
 
 ### Host vars (per-host override)
 
-`ansible/host_vars/winvm01.yml`:
+`host_vars/winvm01.yml`:
 ```yaml
 training_path: C:\apps\training
 department: "Engineering"        
@@ -523,7 +523,7 @@ allowed_users: [aaditya, contoso, admin]  # for loop demo
 
 ```
 
-`ansible/playbooks/variables.yml` uses `path: "{{ training_path }}"` — no change. Add `student02` with different path → same playbook, different per-host value.
+`playbooks/variables.yml` uses `path: "{{ training_path }}"` — no change. Add `student02` with different path → same playbook, different per-host value.
 
 #### Why Variables Matter
 
@@ -593,7 +593,7 @@ Same playbook, same role, same template — different `group_vars` file per envi
 
 ```bash
 mkdir -p group_vars/windows
-ansible-vault create ansible/group_vars/windows/vault.yml
+ansible-vault create group_vars/windows/vault.yml
 # Enter password, then:
 # these are just examples(dont follow this part)
 app_db_server: "sql-training.database.windows.net"
@@ -1197,7 +1197,7 @@ Deploy PHP application
 Restart IIS if required
 ```
 
-```ansible/host_vars/winvm01.yml
+```host_vars/winvm01.yml
 ---
 ---
 # IIS site configuration
@@ -1403,6 +1403,27 @@ $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ```
 
 > `web.config.j2` configures **IIS**; `index.php.j2` configures the **app**. Two templates, two layers.
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <httpErrors errorMode="Detailed" />
+    <handlers>
+      <add name="PHP_via_FastCGI"
+           path="*.php"
+           verb="GET,HEAD,POST"
+           modules="FastCgiModule"
+           scriptProcessor="C:\tools\php85\php-cgi.exe"
+           resourceType="Either" />
+    </handlers>
+    <defaultDocument enabled="true">
+      <files>
+        <add value="index.php" />
+      </files>
+    </defaultDocument>
+  </system.webServer>
+</configuration>
+```
 
 `config.php.j2` — the app-layer config chain, deliberately separate from `web.config.j2`:
 ```php
@@ -1431,7 +1452,7 @@ Same two templates → four rendered files (`web.config` + `index.php` + `config
 ## Section 11 — Roles + Handlers 
 
 ```bash
-ansible-galaxy role init ansible/roles/php_iis
+ansible-galaxy role init roles/php_iis
 ```
 
 ```
@@ -1477,7 +1498,7 @@ Step 1 — `roles/php_iis/defaults/main.yml` (variables with defaults):
 ```yaml
 
 
-<copy from ansible/host_vars/winvm01.yml>
+<copy from host_vars/winvm01.yml>
 
 ```
 
@@ -1691,7 +1712,7 @@ verifier:
 ```
 
 ```bash
-cd ansible/roles/php_iis
+cd roles/php_iis
 molecule create     # skips container, uses delegated
 molecule converge   # runs role on Azure VM
 molecule verify     # runs verification
@@ -1708,7 +1729,7 @@ az vm update -g ansible-winvm01-rg -n ansible-winvm01-vm \
   --set tags.Role=web tags.Environment=development tags.Application=training-iis
 ```
 
-`ansible/inventory/azure_rm.yml`:
+`inventory/azure_rm.yml`:
 ```yaml
 ---
 plugin: azure.azcollection.azure_rm
@@ -1729,10 +1750,10 @@ conditional_groups:
 ```
 
 ```bash
-ansible-inventory -i ansible/inventory/azure_rm.yml --graph
+ansible-inventory -i inventory/azure_rm.yml --graph
 # @all: |--@web: |  |--winvm01
-ansible -i ansible/inventory/azure_rm.yml web -m ansible.windows.win_ping
-ansible-playbook -i ansible/inventory/azure_rm.yml ansible/playbooks/site.yml --ask-vault-pass -l "web:&development"
+ansible -i inventory/azure_rm.yml web -m ansible.windows.win_ping
+ansible-playbook -i inventory/azure_rm.yml playbooks/site.yml --ask-vault-pass -l "web:&development"
 ```
 
 No more editing `windows.ini` when IPs change. **Tags become inventory.**
