@@ -777,7 +777,7 @@ server {
 <body>
 <h1>Hello from {{ inventory_hostname }}!</h1>
 <p>OS: {{ ansible_os_family }}</p>
-<p>Container: {{ container_name }}</p>
+<p>Container: {{ ansible_module_container_id }}</p>
 <h3>Port: {{ nginx_port }}</h3>
 <h3>Greetings: {{ greeting }} </h3>
 </body>
@@ -788,12 +788,12 @@ server {
 ```
 docker run -d --name web01 \
   -p 8001:80 \
-  ubuntu:22.04 sleep infinity
+  python:3.14.7-bookworm sleep infinity
 ```
 ```
 docker run -d --name web02 \
   -p 8002:80 \
-  ubuntu:22.04 sleep infinity
+  python:3.14.7-bookworm sleep infinity
 ```
 
 > docker exec web01 bash -c "apt-get update && apt-get install -y nginx && nginx"
@@ -810,7 +810,7 @@ docker run -d --name web02 \
 # playbooks/nginx1.yml
 ---
 - name: Docker + Nginx with Jinja2
-  hosts: web01
+  hosts: all
   gather_facts: true
   tasks:
     - name: Update apt cache
@@ -822,14 +822,22 @@ docker run -d --name web02 \
         name: nginx
         state: present
 
+    - name: Get container facts
+      community.docker.current_container_facts:
+    
+    - name: Show container ID
+      ansible.builtin.debug:
+        msg: "Container ID: {{ ansible_module_container_id }}"
+
+
     - name: Render nginx.conf from template
       ansible.builtin.template:
-        src: templates/nginx.conf.j2
+        src: ../templates/nginx.conf.j2
         dest: /etc/nginx/sites-available/default
 
     - name: Render index.html from template
       ansible.builtin.template:
-        src: templates/index.html.j2
+        src: ../templates/index.html.j2
         dest: /usr/share/nginx/html/index.html
 
     - name: Start nginx
@@ -837,17 +845,13 @@ docker run -d --name web02 \
         name: nginx
         state: started
 
-    - name: Verify nginx is running
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nginx_port }}/"
-        status_code: 200
 ```
 
 > Add to `inventory/linux.ini`:
 ```ini
 [linux]
-web01 ansible_connection=docker ansible_python_interpreter=/usr/bin/python3
-web02 ansible_connection=docker ansible_python_interpreter=/usr/bin/python3
+web01 ansible_connection=docker ansible_python_interpreter=/usr/local/bin/python3.14
+web02 ansible_connection=docker ansible_python_interpreter=/usr/local/bin/python3.14
 ```
 
 # group_vars (same port for all containers)
@@ -856,9 +860,10 @@ web02 ansible_connection=docker ansible_python_interpreter=/usr/bin/python3
 # group_vars/linux.yml
 ---
 greeting: "hello from group_vars"
+
 ```
 
-All hosts in `[linux]` group get `nginx_port: 8000`.
+All hosts in `[linux]` group get `greeting: "hello from group_vars"`.
 
 host_vars (different port per container)
 
@@ -931,32 +936,37 @@ ansible-galaxy collection install -r requirements.yml
 
 ```yaml
 ---
-- name: Docker + Nginx with Jinja2
-  hosts: linux
-  gather_facts: true
+- name: Create Docker container
+  hosts: ubuntu
+  gather_facts: false
+
   vars:
-    container_name: "web01"
-    nginx_port: 8001
+    container_name: "web03"
+    nginx_port: 8003
+
   tasks:
     - name: Create temp dir for nginx files
       ansible.builtin.file:
-        path: /tmp/nginx/{{ container_name }}
+        path: "/tmp/nginx/{{ container_name }}"
         state: directory
+        mode: "0755"
 
     - name: Render nginx.conf from template
       ansible.builtin.template:
-        src: templates/nginx.conf.j2
-        dest: /tmp/nginx/{{ container_name }}/default.conf
+        src: ../templates/nginx.conf.j2
+        dest: "/tmp/nginx/{{ container_name }}/default.conf"
+        mode: "0644"
 
     - name: Render index.html from template
       ansible.builtin.template:
-        src: templates/index.html.j2
-        dest: /tmp/nginx/{{ container_name }}/index.html
+        src: ../templates/index.html.j2
+        dest: "/tmp/nginx/{{ container_name }}/index.html"
+        mode: "0644"
 
     - name: Spin up Ubuntu container with Python
       community.docker.docker_container:
         name: "{{ container_name }}"
-        image: ubuntu:22.04
+        image: python:3.14.7-bookworm
         state: started
         command: sleep infinity
         expose:
@@ -964,30 +974,54 @@ ansible-galaxy collection install -r requirements.yml
         ports:
           - "{{ nginx_port }}:80"
         volumes:
-          - /tmp/nginx/{{ container_name }}/default.conf:/etc/nginx/sites-available/default:ro
-          - /tmp/nginx/{{ container_name }}/index.html:/usr/share/nginx/html/index.html:ro
+          - "/tmp/nginx/{{ container_name }}/default.conf:/etc/nginx/sites-available/default:ro"
+          - "/tmp/nginx/{{ container_name }}/index.html:/tmp/index.html:ro"
 
-    - name: Install nginx inside container
-      ansible.builtin.command: docker exec {{ container_name }} bash -c "apt-get update && apt-get install -y nginx && nginx"
 
-    - name: Verify nginx is running
-      ansible.builtin.uri:
-        url: "http://localhost:{{ nginx_port }}/"
-        status_code: 200
-      register: result
+- name: Configure nginx inside container
+  hosts: web03
+  gather_facts: true
 
-    - name: Show response
-      ansible.builtin.debug:
-        msg: "Nginx is running on port {{ nginx_port }} - Status: {{ result.status }}"
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Copy custom index.html
+      ansible.builtin.copy:
+        src: /tmp/index.html
+        dest: /usr/share/nginx/html/index.html
+        remote_src: true
+
+
+    - name: Start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+
+```
+
+```index.html.j2
+<html>
+<body>
+<h1>Hello from {{ inventory_hostname }}!</h1>
+<p>Container: {{ container_name }}</p>
+<h3>Port: {{ nginx_port }}</h3>
+<h3>Greetings: {{ greeting }} </h3>
+</body>
+</html>
 ```
 
 write inventory file
 ```
 [linux]
-ubuntu01 ansible_connection=local
-
-[linux:vars]
-ansible_python_interpreter=/usr/bin/python3
+ubuntu ansible_connection=local
+web03 ansble_connection=docker
 ```
 
 ### 3. Run and verify
@@ -1083,72 +1117,176 @@ Windows (IIS)                          Linux (Nginx)
 ```text
 Browser → IIS → PHP → SQLite
 ```
-
-A one-page app: a form (name + message), saved to SQLite, listed below the form. Deliberately minimal — no ORM, no build step, one dependency (PHP), one file (`database.sqlite`) instead of a database server.
+```
+Install PHP
+    ↓
+Enable CGI
+    ↓
+Create application directory
+    ↓
+Create IIS website
+    ↓
+Connect PHP to IIS
+    ↓
+Enable SQLite
+    ↓
+Deploy PHP application
+    ↓
+Restart IIS if required
+```
 
 ```ansible/host_vars/student01.yml
+---
 ---
 # IIS site configuration
 iis_site_name: "TrainingSite"
 application_path: "C:\\apps\\training"
 
+# PHP configuration (Chocolatey installs to C:\\tools\\php)
+php_dir: "C:\\tools\\php"
+php_cgi_path: "C:\\tools\\php\\php-cgi.exe"
+
 # PHP guestbook app
 application_name: "Guestbook - DEV"
-environment: "development"
+app_environment: "development"
 database_path: "C:\\apps\\training\\database.sqlite"
 ```
 
+```playbook/setup_iis.yml
 
-```text
-guestbook/
-├── index.php.j2      # templated — title comes from Ansible vars
-├── database.php       # static — no per-environment differences
-└── config.php.j2      # templated — app-layer config, distinct from web.config.j2
+# Ansible IIS + PHP + SQLite
+
+This playbook prepares a Windows server with IIS, PHP, SQLite support,
+and deploys a simple PHP application.
+
+## Playbook
+
+---
+- name: Setup IIS with PHP and SQLite
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    php_path: 'C:\tools\php85\php-cgi.exe'
+
+  tasks:
+
+    # -------------------------------------------------
+    # PHP
+    # -------------------------------------------------
+
+    # Installs PHP using the Chocolatey package manager.
+    - name: Install PHP
+      chocolatey.chocolatey.win_chocolatey:
+        name: php
+        state: present
+
+    # Enables the IIS CGI feature required to run PHP through FastCGI.
+    - name: Enable IIS CGI
+      ansible.windows.win_feature:
+        name: Web-CGI
+        state: present
+
+    # -------------------------------------------------
+    # Application directory
+    # -------------------------------------------------
+    # Creates the directory where the PHP application will be hosted.
+    - name: Create application directory
+      ansible.windows.win_file:
+        path: "{{ application_path }}"
+        state: directory
+        # -------------------------------------------------
+        # IIS
+        # -------------------------------------------------
+    # Removes the default IIS website so port 80 can be used by our application.
+    - name: Remove Default Web Site
+      microsoft.iis.website:
+        name: "Default Web Site"
+        state: absent
+
+    # Creates our IIS website and points it to the application directory.
+    - name: Create application website
+      microsoft.iis.website:
+        name: "{{ iis_site_name }}"
+        physical_path: "{{ application_path }}"
+        state: started
+        bindings:
+          set:
+            - ip: "*"
+              port: 80
+
+
+    # -------------------------------------------------
+    # PHP FastCGI
+    # -------------------------------------------------
+    # Adds PHP to IIS FastCGI so IIS knows how to execute .php files.
+    - name: Register PHP FastCGI
+      community.windows.win_xml:
+        path: 'C:\Windows\System32\inetsrv\config\applicationHost.config'
+        xpath: /configuration/system.webServer/fastCgi
+        fragment: '<application fullPath="{{ php_path }}" maxInstances="4" instanceMaxRequests="10000" />'
+        state: present
+
+    # -------------------------------------------------
+    # SQLite
+    # -------------------------------------------------
+    # Iterates over the PHP configuration and uncomment/enables the SQLite
+    # extensions required by the application.
+    - name: Enable PHP SQLite extensions
+      community.windows.win_lineinfile:
+        path: C:\tools\php85\php.ini
+        regex: '^;?extension={{ item }}$'
+        line: 'extension={{ item }}'
+      loop:
+        - pdo_sqlite
+        - sqlite3
+      notify: Restart IIS
+
+    # -------------------------------------------------
+    # Application
+    # -------------------------------------------------
+    # Generates web.config from a Jinja2 template.
+    # This config tells IIS how to handle PHP requests.
+    - name: Deploy web.config
+      ansible.windows.win_template:
+        src: ../templates/web.config.j2
+        dest: "{{ application_path }}\web.config"
+      when:
+        - app_environment == "development"
+        #- confirm_deploy | default(false) | bool
+
+    # Copies the static database.php file to the IIS application directory.
+    - name: Deploy database.php
+      ansible.windows.win_copy:
+        src: ../files/guestbook/database.php
+        dest: "{{ application_path }}\database.php"
+
+    # Generates index.php from a Jinja2 template.
+    # Ansible variables can be inserted into the PHP file.
+    - name: Deploy index.php
+      ansible.windows.win_template:
+        src: ../templates/index.php.j2
+        dest: "{{ application_path }}\index.php"
+
+    # Generates the application configuration from a Jinja2 template.
+    - name: Deploy application config
+      ansible.windows.win_template:
+        src: ../templates/config.php.j2
+        dest: "{{ application_path }}\config.php"
+
+  handlers:
+
+    # Restarts IIS only when a task notifies this handler.
+    - name: Restart IIS
+      ansible.windows.win_service:
+        name: W3SVC
+        state: restarted
+
 ```
 
-### Exercise 1 — Install PHP on IIS
-
-```yaml
-- name: Install PHP via Chocolatey
-  chocolatey.chocolatey.win_chocolatey:
-    name: php
-    state: present
-
-- name: Enable IIS CGI feature
-  ansible.windows.win_feature:
-    name: Web-CGI
-    state: present
-
-- name: Register PHP with IIS FastCGI
-  community.windows.win_iis_webapplication: 
-    name: "{{ iis_site_name }}"
-    site: "{{ iis_site_name }}"
-    physical_path: "{{ application_path }}"
-```
-
-> Treat the exact FastCGI registration as instructor-provided — the point of the exercise is the *pattern* (install runtime → enable feature → wire it to IIS), not memorizing IIS/PHP plumbing.
-
-### Exercise 2 — Deploy the application files
-
-```yaml
-- name: Deploy static application files
-  ansible.windows.win_copy:
-    src: files/guestbook/database.php
-    dest: "{{ application_path }}\\database.php"
-
-- name: Deploy templated index page
-  ansible.windows.win_template:
-    src: templates/index.php.j2
-    dest: "{{ application_path }}\\index.php"
-
-- name: Deploy templated app config
-  ansible.windows.win_template:
-    src: templates/config.php.j2
-    dest: "{{ application_path }}\\config.php"
-```
 
 `database.php` (static — same in every environment):
-```php
+```file/database.php
 <?php
 $db = new PDO('sqlite:' . __DIR__ . '/database.sqlite');
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
@@ -1163,7 +1301,7 @@ $db->exec("
 ```
 
 `index.php.j2` — same PHP as a static `index.php` would have, but the title is now a Jinja2 variable:
-```php
+```templates/index.php.j2
 <?php
 require_once 'database.php';
 
@@ -1205,15 +1343,15 @@ $messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
 </html>
 ```
 
-> Same idea as `web.config.j2` from before, just one layer up the stack: `web.config.j2` configures **IIS**; `index.php.j2` configures the **application it's serving**. Worth pointing out explicitly — two different things get templated for two different reasons.
+> `web.config.j2` configures **IIS**; `index.php.j2` configures the **app**. Two templates, two layers.
 
 `config.php.j2` — the app-layer config chain, deliberately separate from `web.config.j2`:
 ```php
 <?php
 return [
-    'app_name'    => '{{ application_name }}',
-    'environment' => '{{ environment }}',
-    'database'    => '{{ database_path }}',
+    'app_name'    => 'Guestbook - DEV',
+    'environment' => 'development',
+    'database'    => 'C:\\apps\\training\\database.sqlite',
 ];
 ```
 
@@ -1228,121 +1366,217 @@ Env files gain two more keys:
 
 Same two templates → four rendered files (`web.config` + `index.php` + `config.php` × dev/prod). Keep logic in vars, use filters `| upper | default("x") | replace("-", "_")`.
 
-### Bonus challenge — the permissions gotcha
-
-Deploy the app, load the page — it renders. Submit the form — a database permission error.
-
-> **The task:** SQLite needs the IIS application-pool identity to have write permission on the directory containing `database.sqlite`, not just the site's read access. Find out why the form fails and fix it with an Ansible task (hint: it's a permissions module, not a `win_copy` problem).
-
-This is real-world Ansible debugging, same spirit as the `win_ping` fun fact and the WinRM troubleshoot-order box back in PHASE 4/5 — don't hand students the fix.
 
 ---
 
 ## PHASE 10 — Roles + Handlers (Guide §52-57)
 
 ```bash
-ansible-galaxy role init ansible/roles/iis
+ansible-galaxy role init ansible/roles/php_iis
 ```
 
 ```
-roles/iis/
-├── defaults/main.yml
-├── handlers/main.yml
-├── tasks/main.yml
-├── files/guestbook/database.php
-├── templates/web.config.j2
-├── templates/index.php.j2
-├── templates/config.php.j2
-└── meta/main.yml
+roles/
+└── php_iis/
+    ├── tasks/
+    │   └── main.yml
+    ├── templates/
+    │   ├── web.config.j2
+    │   ├── index.php.j2
+    │   └── config.php.j2
+    ├── files/
+    │   └── database.php
+    ├── handlers/
+    │   └── main.yml
+    └── defaults/
+        └── main.yml
 ```
 
-Move everything into role — including the guestbook files from PHASE 9's `files/guestbook/` and `templates/`:
+### Converting the PHP app into a role
 
-`defaults/main.yml`:
+**Before (flat playbook):**
 ```yaml
-application_name: "Training IIS"
-application_path: "C:\\apps\\training"
-database_path: "C:\\apps\\training\\database.sqlite"
-iis_site_name: "TrainingSite"
-iis_port: 80
-environment: "development"
+# playbooks/iis.yml — everything in one file
+- name: Deploy PHP app
+  hosts: windows
+  tasks:
+    - ansible.windows.win_feature: { name: Web-Server, state: present }
+    - ansible.windows.win_feature: { name: Web-CGI, state: present }
+    - chocolatey.chocolatey.win_chocolatey: { name: php, state: present }
+    - ansible.windows.win_template: { src: web.config.j2, dest: ... }
+    - ansible.windows.win_template: { src: index.php.j2, dest: ... }
+    - ansible.windows.win_copy: { src: database.php, dest: ... }
+    - ansible.windows.win_iis_webapplication: { ... }
+  handlers:
+    - name: restart IIS
+      ansible.windows.win_service: { name: W3SVC, state: restarted }
 ```
 
-`tasks/main.yml`:
+**After (role):**
+
+Step 1 — `roles/php_iis/defaults/main.yml` (variables with defaults):
+```yaml
+---
+iis_site_name: "TrainingSite"
+application_path: "C:\\apps\\training"
+application_name: "Guestbook"
+environment: "development"
+database_path: "C:\\apps\\training\\database.sqlite"
+```
+
+Step 2 — `roles/php_iis/tasks/main.yml` (tasks from playbook):
 ```yaml
 ---
 - name: Install IIS
   ansible.windows.win_feature:
-    name: [Web-Server, Web-Mgmt-Tools]
-    state: present
-    include_management_tools: true
-
-- name: Install PHP via Chocolatey
-  chocolatey.chocolatey.win_chocolatey:
-    name: php
+    name: Web-Server
     state: present
 
-- name: Enable IIS CGI feature
+- name: Install CGI feature
   ansible.windows.win_feature:
     name: Web-CGI
     state: present
 
-- name: Create application directory
-  ansible.windows.win_file:
-    path: "{{ application_path }}"
-    state: directory
+- name: Install PHP
+  chocolatey.chocolatey.win_chocolatey:
+    name: php
+    state: present
 
 - name: Deploy web.config
   ansible.windows.win_template:
     src: web.config.j2
     dest: "{{ application_path }}\\web.config"
-  notify: Restart IIS
 
-- name: Deploy static database.php
-  ansible.windows.win_copy:
-    src: guestbook/database.php
-    dest: "{{ application_path }}\\database.php"
-
-- name: Deploy templated index page
+- name: Deploy index.php
   ansible.windows.win_template:
     src: index.php.j2
     dest: "{{ application_path }}\\index.php"
 
-- name: Deploy templated app config
+- name: Deploy config.php
   ansible.windows.win_template:
     src: config.php.j2
     dest: "{{ application_path }}\\config.php"
 
-- name: Ensure IIS service is running
-  ansible.windows.win_service:
-    name: W3SVC
-    state: started
-    start_mode: auto
+- name: Deploy database.php
+  ansible.windows.win_copy:
+    src: database.php
+    dest: "{{ application_path }}\\database.php"
+
+- name: Register PHP with IIS
+  community.windows.win_iis_webapplication:
+    name: "{{ iis_site_name }}"
+    site: "{{ iis_site_name }}"
+    physical_path: "{{ application_path }}"
+  notify: restart IIS
 ```
 
-> The permissions fix from PHASE 9's bonus challenge belongs here too, right after the file deploys — leave it as a task for students to add.
-
-`handlers/main.yml`:
+Step 3 — `roles/php_iis/handlers/main.yml`:
 ```yaml
 ---
-- name: Restart IIS
+- name: restart IIS
   ansible.windows.win_service:
     name: W3SVC
     state: restarted
 ```
 
-Final `ansible/playbooks/site.yml`:
+Step 4 — Copy templates and files into role:
+```bash
+cp templates/web.config.j2  roles/php_iis/templates/
+cp templates/index.php.j2   roles/php_iis/templates/
+cp templates/config.php.j2  roles/php_iis/templates/
+cp files/database.php        roles/php_iis/files/
+```
+
+Step 5 — Playbook becomes one line:
 ```yaml
+# playbooks/site.yml
 ---
-- name: Configure Windows IIS servers
-  hosts: web
-  gather_facts: true
+- name: Deploy PHP app
+  hosts: windows
   roles:
-    - role: iis
+    - php_iis
+```
+
+**Why roles?**
+
+| Flat playbook | Role |
+|--------------|------|
+| Everything in one file | Split by concern (tasks, templates, handlers, defaults) |
+| Copy-paste for new hosts | Reuse across playbooks |
+| Variables hardcoded | Overridable via `defaults/`, `host_vars/`, `group_vars/` |
+| No handlers section | `notify:` works across tasks |
+| Hard to test | Can test role independently |
+
+**Override defaults per host:**
+```yaml
+# host_vars/student02.yml
+---
+application_name: "Guestbook - PROD"
+#app_environment: "production"
+database_path: "C:\\apps\\prod\\database.sqlite"
+```
+
+Same role, different values per host.
+
+### Testing with Molecule (delegated driver)
+
+```yaml
+# roles/php_iis/molecule/default/molecule.yml
+---
+dependency:
+  name: galaxy
+driver:
+  name: delegated
+platforms:
+  - name: student01
+    managed: false
+provisioner:
+  name: ansible
+  inventory:
+    hosts:
+      student01:
+        ansible_host: 40.81.225.81
+        ansible_user: wakizu
+        ansible_connection: psrp
+        ansible_psrp_port: 5986
+        ansible_psrp_cert_validation: false
+verifier:
+  name: ansible
+```
+
+```yaml
+# roles/php_iis/molecule/default/verify.yml
+---
+- name: Verify IIS
+  hosts: student01
+  tasks:
+    - name: IIS service is running
+      ansible.windows.win_service_info:
+        name: W3SVC
+      register: iis
+
+    - name: Assert IIS running
+      ansible.builtin.assert:
+        that:
+          - iis.services[0].state == "running"
+
+    - name: Site exists
+      community.windows.win_iis_website_info:
+        name: TrainingSite
+      register: site
+
+    - name: Assert site exists
+      ansible.builtin.assert:
+        that:
+          - site.sites | length > 0
 ```
 
 ```bash
-ansible-playbook -i ansible/inventory/azure_rm.yml ansible/playbooks/site.yml --ask-vault-pass
+cd ansible/roles/php_iis
+molecule create     # skips container, uses delegated
+molecule converge   # runs role on Azure VM
+molecule verify     # runs verification
+molecule destroy    # cleans up
 ```
 
 ---
@@ -1386,58 +1620,9 @@ No more editing `windows.ini` when IPs change. **Tags become inventory.**
 
 ---
 
-## PHASE 12 — Verification + Lint (Guide §58-62)
-
-`ansible/playbooks/verify.yml`:
-```yaml
----
-- name: Verify IIS configuration
-  hosts: web
-  gather_facts: false
-  tasks:
-    - win_service_info: { name: W3SVC } register: iis_service
-    - assert:
-        that:
-          - iis_service.services | length > 0
-          - iis_service.services[0].state == "started"
-        fail_msg: "IIS service is not running"
-        success_msg: "IIS service is running"
-    - win_stat: { path: "{{ application_path }}" } register: app_dir
-    - assert:
-        that:
-          - app_dir.stat.exists
-          - app_dir.stat.isdir
-    - win_stat: { path: "{{ application_path }}\\web.config" } register: wc
-    - assert:
-        that:
-          - wc.stat.exists
-          - wc.stat.size > 0
-    - win_stat: { path: "{{ application_path }}\\index.php" } register: app_index
-    - assert:
-        that:
-          - app_index.stat.exists
-        fail_msg: "Guestbook index.php was not deployed"
-    - win_stat: { path: "{{ database_path }}" } register: app_db
-    - assert:
-        that:
-          - app_db.stat.exists
-        fail_msg: "database.sqlite missing — has the app ever been submitted to successfully?"
-```
-
-```bash
-pip install ansible-lint
-ansible-lint
-ansible-playbook -i inventory/azure_rm.yml playbooks/site.yml --syntax-check
-ansible-inventory -i inventory/azure_rm.yml --graph
-ansible -i inventory/azure_rm.yml web -m ansible.windows.win_ping
-ansible-playbook -i inventory/azure_rm.yml playbooks/site.yml --ask-vault-pass
-ansible-playbook -i inventory/azure_rm.yml playbooks/verify.yml --ask-vault-pass
-curl -I http://<VM_PUBLIC_IP>
-```
-
 ---
 
-## PHASE 13 — CI/CD (Guide §63-67)
+## PHASE 13 — CI/CD (optional)
 
 `azure-pipelines.yml`:
 ```yaml
@@ -1547,6 +1732,3 @@ curl -I http://<VM_PUBLIC_IP>
 ```
 
 ---
-
-Full instructor guide (13 modules, troubleshooting tree, student challenge, assessment):
-`~/Documents/Obsidian Vault/StartSmall Works/Hitachi/Ansible/ansible_azure_wsl_full_training_guide.md`
