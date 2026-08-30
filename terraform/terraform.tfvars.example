@@ -1,0 +1,4 @@
+location            = "centralindia"
+resource_group_name = "<group-name>"
+admin_username      = "<user-name>"
+admin_password      = "REPLACE_ME"
