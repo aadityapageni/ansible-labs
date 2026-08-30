@@ -1,29 +1,26 @@
-# ansible-labs
+# Overview
 
-> **Story:** Terraform builds the house. Ansible furnishes it. — `ansible/` is the reference solution; this README is the step-by-step path to get there (WSL = control node, Azure Windows = managed node).
+What you'll build, in order: a Windows host in Azure (Terraform) → a working Ansible connection to it (WinRM/PSRP) → a first playbook and variables → secrets in Vault → Jinja2 templating → a real deployed app (PHP + IIS + SQLite guestbook) → that app turned into a reusable role → dynamic inventory → a CI/CD pipeline that runs the whole thing.
 
-Lab flow (from instructor guide):
-
-```
-PHASE 1  Hosts Setup (Terraform + Docker)
-PHASE 2  Why Ansible
-PHASE 3  Install Ansible + Ad-hoc Basics
-PHASE 4  Connections: WinRM vs PSRP
-PHASE 5  Static Inventory + First Connection
-PHASE 6  First Playbook + Facts
-PHASE 7  Variables + Precedence
-PHASE 8  Vault
-PHASE 9  Guestbook App: PHP + IIS + Jinja2
-PHASE 10 Roles + Handlers
-PHASE 11 Dynamic Inventory
-PHASE 12 Verification + Lint
-PHASE 13 CI/CD (Azure DevOps)
-```
-
+| # | Section | Covers |
+|---|---------|--------|
+| 1 | [Hosts Setup](#section-1--hosts-setup-terraform--docker) | Terraform + Docker |
+| 2 | [Why Ansible](#section-2--why-ansible) | Agentless, idempotent, IaC |
+| 3 | [Install Ansible](#section-3--install-ansible-python-venv--ad-hoc-basics) | Python venv + ad-hoc basics |
+| 4 | [Connections](#section-4--connections-winrm-vs-psrp) | WinRM vs PSRP |
+| 5 | [Static Inventory](#section-5--static-inventory--first-connection-guide-22-26) | First connection |
+| 6 | [First Playbook + Facts](#section-6--first-playbook--facts) | `gather_facts`, `ansible.cfg` |
+| 7 | [Variables + Precedence](#section-7--variables--precedence) | group/host vars, FQCN |
+| 8 | [Vault](#section-8--vault) | Encrypting secrets |
+| 9 | [Jinja2 Templating](#section-9--jinja2-templating) | Basics, IIS + Docker/Nginx examples, collections |
+| 10 | [Guestbook App](#section-10--guestbook-app-php--iis--sqlite) | Real PHP + IIS + SQLite deployment |
+| 11 | [Roles + Handlers](#section-11--roles--handlers-guide-52-57) | Converting the app into a role |
+| 12 | [Dynamic Inventory](#section-12--azure-dynamic-inventory-optional) | Azure tags → inventory |
+| 13 | [CI/CD](#section-13--cicd-optional) | Azure DevOps pipeline |
 
 ---
 
-## PHASE 1 — Hosts Setup (Terraform + Docker)
+## Section 1 — Hosts Setup (Terraform + Docker)
 
 ### Azure Resources Terraform Creates
 
@@ -70,9 +67,9 @@ terraform output
 Output example:
 ```
 public_ip     = "20.x.x.x"
-resource_group_name = "ansible-student01-rg"
-vm_name       = "ansible-student01-vm"
-computer_name = "web-student01"
+resource_group_name = "ansible-winvm01-rg"
+vm_name       = "ansible-winvm01-vm"
+computer_name = "web-winvm01"
 ```
 
 ```
@@ -83,21 +80,21 @@ computer_name = "web-student01"
 docker run -d --name ansible-test1 --rm python:3.14.7-bookworm sleep 6000
 ```
 
-> Keep these two containers running — `ansible-test` (Alpine, no Python) and `ansible-test1` (has Python) come back in PHASE 5 to demonstrate why Ansible needs Python on every managed node.
+> Keep these two containers running — `ansible-test` (Alpine, no Python) and `ansible-test1` (has Python) come back in Section 5 to demonstrate why Ansible needs Python on every managed node.
 
 ---
 
-## PHASE 2 — Why Ansible
+## Section 2 — Why Ansible
 
 1. **Agentless** — No daemon on managed nodes. SSH/WinRM is already there. Install Ansible on one machine, control thousands.
-2. **Idempotent** — Run same playbook 100 times, result is the same. `state: present` doesn't re-install if already present.
+2. **Idempotent***(*with astreik*) — Run same playbook 100 times, result is the same. `state: present` doesn't re-install if already present.
 3. **Reads like English** — YAML tasks describe *what* you want, not *how*. `win_feature: { name: Web-Server, state: present }` — students can read it day one.
-4. **One language, all platforms** — Same Ansible playbook configures Windows (WinRM), Linux (SSH), and Docker containers. No separate tool per OS.
+4. **One language, all platforms***(*with astreik*) — Same Ansible playbook configures Windows (WinRM), Linux (SSH), and Docker containers. No separate tool per OS.
 5. **Infrastructure as Code** — Playbooks are versioned in Git. Track changes, review PRs, rollback. `terraform.tfvars` creates the VM; Ansible playbooks configure what's inside.
 
 ---
 
-## PHASE 3 — Install Ansible (Python venv) + Ad-hoc Basics
+## Section 3 — Install Ansible (Python venv) + Ad-hoc Basics
 
 ```bash
 # In WSL Ubuntu
@@ -124,7 +121,7 @@ ansible localhost -m shell -a "df -h"
 
 > **A module is a unit of work Ansible knows how to perform.**
 
-
+> [It is just python code underneath.](https://github.com/ansible/ansible/blob/devel/lib/ansible/modules/ping.py)
 
 ```ini
 [local]
@@ -137,7 +134,7 @@ Run:
 ansible -i inventory.ini local -m ping
 ```
 
-## PHASE 4 — Connections: WinRM vs PSRP
+## Section 4 — Connections: WinRM vs PSRP
 
 | | WinRM | PSRP |
 |---|---|---|
@@ -192,27 +189,9 @@ PSRP:   sends object {ModuleName: "W3SVC"} → PowerShell.exe → returns Servic
 
 ---
 
-## PHASE 5 — Static Inventory + First Connection (Guide §22-26)
+## Section 5 — Static Inventory + First Connection 
 
 Recap — which connection plugin routes where:
-
-```mermaid
-graph TD
-    A[ansible-playbook] --> B{Connection Plugin}
-    B -->|ansible_connection=psrp| C[WinRM HTTPS :5986]
-    B -->|ansible_connection=ssh| D[SSH :22]
-    B -->|ansible_connection=docker| E[Docker exec]
-    C --> F[powershell.exe]
-    D --> G[Python3 + PowerShell]
-    E --> H[Python3]
-```
-
-| Connection | Transport | Managed Node Needs | Use Case |
-|-----------|-----------|-------------------|----------|
-| `psrp` | WinRM HTTPS :5986 | PowerShell | Windows (recommended, see PHASE 4) |
-| `winrm` | WinRM HTTPS :5986 | PowerShell | Windows (older) |
-| `ssh` | SSH :22 | Python3 | Linux / Windows (OpenSSH) |
-| `docker` | Docker API | Python3 | Local containers |
 
 Verify the port is reachable from WSL before pointing Ansible at it:
 ```bash
@@ -229,7 +208,7 @@ Create `ansible/inventory/windows.ini`:
 
 ```ini
 [windows]
-student01 ansible_host=20.x.x.x
+winvm01 ansible_host=20.x.x.x
 
 [windows:vars]
 ansible_connection=psrp
@@ -243,7 +222,7 @@ ansible_psrp_cert_validation=ignore
 Ad-hoc test:
 ```bash
 ansible -i ansible/inventory/windows.ini windows -m ansible.windows.win_ping
-# student01 | SUCCESS => {"changed": false, "ping": "pong"}
+# winvm01 | SUCCESS => {"changed": false, "ping": "pong"}
 ```
 
 #### Fun Fact — `win_ping` Is Not Ping
@@ -280,9 +259,9 @@ ansible-playbook -i ansible/inventory/windows.ini ansible/playbooks/ping.yml
 ### Putting it together — what just happened
 
 1. **You write a playbook** (`ping.yml`) describing tasks against a `hosts:` group.
-2. **Ansible reads the inventory** (`windows.ini`) to resolve `windows` into `student01`.
-3. **The connection plugin** (`psrp`, from PHASE 4) decides how to reach it — WinRM HTTPS on :5986.
-4. **The target needs Python (or PowerShell for Windows).** Modules are scripts Ansible copies to the target and executes there — no Python/PowerShell runtime, no result. Try it against the two containers from PHASE 1:
+2. **Ansible reads the inventory** (`windows.ini`) to resolve `windows` into `winvm01`.
+3. **The connection plugin** (`psrp`, from Section 4) decides how to reach it — WinRM HTTPS on :5986.
+4. **The target needs Python (or PowerShell for Windows).** Modules are scripts Ansible copies to the target and executes there — no Python/PowerShell runtime, no result. Try it against the two containers from Section 1:
    ```bash
    ansible ansible-test -m ping -e "ansible_connection=docker" -i "ansible-test,"
    ansible ansible-test1 -m ping -e "ansible_connection=docker" -i "ansible-test1,"
@@ -293,20 +272,31 @@ ansible-playbook -i ansible/inventory/windows.ini ansible/playbooks/ping.yml
    ```
    Same lesson applies to Windows: no PowerShell/WinRM listener, no result.
 
+
+```mermaid
+graph TD
+    A[ansible-playbook] --> B{Connection Plugin}
+    B -->|ansible_connection=psrp| C[WinRM HTTPS :5986]
+    B -->|ansible_connection=ssh| D[SSH :22]
+    B -->|ansible_connection=docker| E[Docker exec]
+    C --> F[powershell.exe]
+    D --> G[Python3 + PowerShell]
+    E --> H[Python3]
+```
+
+| Connection | Transport | Managed Node Needs | Use Case |
+|-----------|-----------|-------------------|----------|
+| `psrp` | WinRM HTTPS :5986 | PowerShell | Windows (recommended, see Section 4) |
+| `winrm` | WinRM HTTPS :5986 | PowerShell | Windows (older) |
+| `ssh` | SSH :22 | Python3 | Linux / Windows (OpenSSH) |
+| `docker` | Docker API | Python3 | Local containers |
+
+
 ---
 
-## PHASE 6 — First Playbook + Facts
-Now change:
+## Section 6 — First Playbook + Facts
 
-``` yaml
-gather_facts: false
-```
 
-to:
-
-``` yaml
-gather_facts: true
-```
 
 Playbook:
 
@@ -316,7 +306,7 @@ Playbook:
 ---
 - name: Gather Windows information
   hosts: windows
-
+  gather_facts: false
   tasks:
     - name: Show Windows hostname
       ansible.builtin.debug:
@@ -329,7 +319,32 @@ Playbook:
     - name: Show operating system
       ansible.builtin.debug:
         var: ansible_distribution
+
+    - name: Print all gather_facts
+      ansible.builtin.debug:
+        var: ansible_facts
 ```
+
+Run:
+
+``` bash
+ansible-playbook \
+  -i inventory/windows.ini \
+  playbooks/facts.yml
+```
+
+Now change:
+
+``` yaml
+gather_facts: false
+```
+
+to:
+
+``` yaml
+gather_facts: true
+```
+
 
 Run:
 
@@ -344,14 +359,14 @@ ansible-playbook \
 
 > Facts=information Ansible discovers about the managed machine
 
-## `ansible.cfg`
+### `ansible.cfg`
 
 Ansible reads `ansible.cfg` from the working directory (or `~/.ansible.cfg`, `/etc/ansible/ansible.cfg`). It sets defaults so you don't pass flags every time.
 
 ```ini
 # ansible/ansible.cfg
 [defaults]
-inventory = inventory/all.ini
+inventory = inventory/windows.ini
 interpreter_python = /usr/bin/python3
 remote_tmp = /tmp/.ansible/tmp
 gathering = smart
@@ -362,7 +377,7 @@ become = false
 ```
 
 - `inventory` — default inventory, skip `-i` flag
-- `interpreter_python` — lock Python path, kill `[WARNING] discovered interpreter` 
+- `interpreter_python` — lock Python path, kill `[WARNING] discovered interpreter`
 - `remote_tmp` — fix `/tmp` issues on minimal containers
 - `gathering = smart` — cache facts, only re-gather when host changes
 - `gathering = explicit` — **never gather unless playbook says `gather_facts: true`** — saves time when you don't need OS info
@@ -370,7 +385,7 @@ become = false
 
 ---
 
-## PHASE 7 — Variables + Precedence 
+## Section 7 — Variables + Precedence
 
 in `ansible/playbook/hello.yml`
 ```yaml
@@ -385,11 +400,26 @@ in `ansible/playbook/hello.yml`
 
     - name: Create application directory
       ansible.windows.win_file:
-        path: "C:\apps\training"
+        path: "C:\\apps\\training"
         state: directory
 
 ```
 
+```
+ansible-playbook -i inventory/windows.ini playbooks/hello.yml
+```
+
+### Variable files
+
+`ansible/group_vars/windows.yml`:
+```yaml
+---
+application_name: "Training IIS"
+application_path: "C:\\apps\\training"
+iis_site_name: "TrainingSite"
+iis_port: 8080
+environment: "development"
+```
 
 ```yaml
 ---
@@ -420,8 +450,12 @@ Start simple `ansible/playbooks/variables.yml`:
     application_name: "Training IIS Application"
     application_port: 8080
   tasks:
-    - debug: { msg: "Application: {{ application_name }}" }
-    - debug: { msg: "Port: {{ application_port }}" }
+    - name: display app name
+      debug:
+        msg: "Application: {{ application_name }}"
+    - name: display container port
+      debug:
+        msg: "Application port: {{ application_port }}"
 ```
 
 `debug:` and `ansible.builtin.debug:` are the **same module** — Ansible resolves both.
@@ -462,7 +496,7 @@ Playbook reads them automatically (no `-e` needed).
 
 > you can do ansible dry check to check which variable preceds
 
-### Precedence experiment 
+### Precedence experiment
 
 1. `group_vars/windows.yml: application_port: 8080` → output: `Port: 8080`
 2. Add play `vars: { application_port: 9090 }` → output: `Port: 9090`
@@ -472,7 +506,7 @@ Playbook reads them automatically (no `-e` needed).
 -e (wins)
 Play/task vars
 Host vars
-Group vars   
+Group vars
 Defaults
 ```
 
@@ -480,9 +514,13 @@ Defaults
 
 ### Host vars (per-host override)
 
-`ansible/host_vars/student01.yml`:
+`ansible/host_vars/winvm01.yml`:
 ```yaml
 training_path: C:\apps\training
+department: "Engineering"        
+app_environment: "development"       # for conditional demo
+allowed_users: [aaditya, contoso, admin]  # for loop demo
+
 ```
 
 `ansible/playbooks/variables.yml` uses `path: "{{ training_path }}"` — no change. Add `student02` with different path → same playbook, different per-host value.
@@ -551,17 +589,20 @@ ansible-playbook -i inventory/windows.ini playbooks/iis.yml -l production
 Same playbook, same role, same template — different `group_vars` file per environment.
 ---
 
-## PHASE 8 — Vault
+## Section 8 — Vault
 
 ```bash
 mkdir -p group_vars/windows
 ansible-vault create ansible/group_vars/windows/vault.yml
 # Enter password, then:
+# these are just examples(dont follow this part)
 app_db_server: "sql-training.database.windows.net"
 app_db_name: "training"
 app_db_username: "training_app"
 app_db_password: "REPLACE_WITH_SECRET"
 
+#do this
+ansible_password: "<replace with your host password from inventory>"
 ```
 
 ```bash
@@ -581,8 +622,8 @@ ansible-playbook -i inventory/windows.ini playbooks/iis.yml --ask-vault-pass
 ```ini
 # inventory/windows.ini
 [windows:vars]
-ansible_user=wakizu
-ansible_password=!BRr39E,BAPUWq    
+ansible_user=aaditya
+ansible_password=!BRr39E,BAPUWq
 ```
 
 **After (encrypted in vault):**
@@ -590,7 +631,7 @@ ansible_password=!BRr39E,BAPUWq
 ```ini
 # inventory/windows.ini
 [windows:vars]
-ansible_user=wakizu                 
+ansible_user=aaditya
 # ansible_password removed — now in vault
 ```
 
@@ -640,11 +681,13 @@ ansible-playbook -i inventory/windows.ini playbooks/iis.yml
 
 ---
 
-## Jinja2 in 2 minutes
+## Section 9 — Jinja2 Templating
 
 Jinja2 is a templating engine. Ansible uses it to render config files with variables.
 
-### Before (hardcoded)
+### Jinja2 in 2 Minutes
+
+#### Before (hardcoded)
 
 `hello.yml`:
 ```yaml
@@ -653,21 +696,37 @@ Jinja2 is a templating engine. Ansible uses it to render config files with varia
     dest: "{{ ansible_facts['env'].USERPROFILE }}\\Desktop\\hello.txt"
 ```
 
-### After (template with variables)
+#### After (template with variables)
 
 Create `templates/hello.txt.j2`:
 ```jinja2
+
 Hello {{ ansible_facts['env'].COMPUTERNAME }}!
 
-User: {{ ansible_facts['env'].USERNAME }}
+User: {{ ansible_facts['env'].USERNAME }}          {# Variable: {{ variable }} #}
+User (upper): {{ ansible_facts['env'].USERNAME | upper }}  {# Filter: | upper -> AADITYA #}
+Department: {{ department | default("n/a") }}       {# Default: n/a if undefined #}
+
+{% if environment == "development" %}               {# Conditional #}
+Environment: DEV — debug mode ON
+{% else %}
+Environment: PROD
+{% endif %}
+
+Allowed users:                                     {# Loop #}
+{% for user in allowed_users %}
+- {{ user }}
+{% endfor %}
+
 Host: {{ inventory_hostname }}
 Date: {{ ansible_date_time.date }}
+
 ```
 
 Update `hello.yml`:
 ```yaml
 - ansible.windows.win_template:
-    src: templates/hello.txt.j2
+    src: ../templates/hello.txt.j2
     dest: "{{ ansible_facts['env'].USERPROFILE }}\\Desktop\\hello.txt"
 ```
 
@@ -675,17 +734,17 @@ Result on VM:
 ```
 Hello WEB-01!
 
-User: wakizu
-Host: student01
-Date: 2026-08-29
+User: aaditya
+Host: winvm01
+Date: 2026-08-24
 ```
 
 **Key Jinja2 features:**
 
 | Syntax | Example | Output |
 |--------|---------|--------|
-| Variable | `{{ variable }}` | `wakizu` |
-| Filter | `{{ name \| upper }}` | `WAKIZU` |
+| Variable | `{{ variable }}` | `aaditya` |
+| Filter | `{{ name \| upper }}` | `AADITYA` |
 | Default | `{{ x \| default("n/a") }}` | `n/a` if x is undefined |
 | Conditional | `{% if env == "dev" %}true{% endif %}` | `true` if dev |
 | Loop | `{% for i in list %}{{ i }}{% endfor %}` | all items |
@@ -694,9 +753,9 @@ Date: 2026-08-29
 
 ---
 
-## Simplest IIS + Jinja2 example
+### Simplest IIS + Jinja2 Example
 
-### 1. Template: `templates/index.html.j2`
+#### 1. Template: `templates/index.html.j2`
 
 ```html
 <html>
@@ -708,7 +767,7 @@ Date: 2026-08-29
 </html>
 ```
 
-### 2. Playbook: `playbooks/simple_iis.yml`
+#### 2. Playbook: `playbooks/simple_iis.yml`
 
 ```yaml
 ---
@@ -738,7 +797,7 @@ Date: 2026-08-29
 
 
 
-### What just happened?
+#### What just happened?
 
 ```mermaid
 sequenceDiagram
@@ -755,9 +814,9 @@ sequenceDiagram
 
 ---
 
-## Docker + Nginx + Jinja2 example
+### Docker + Nginx + Jinja2 Example
 
-### 1. Template: `templates/nginx.conf.j2`
+#### 1. Template: `templates/nginx.conf.j2`
 
 ```nginx
 server {
@@ -770,7 +829,7 @@ server {
     }
 }
 ```
-### 2. Template: `templates/index.html.j2`
+#### 2. Template: `templates/index.html.j2`
 
 ```html
 <html>
@@ -804,7 +863,7 @@ docker run -d --name web02 \
 
 
 
-### Ansible does the same thing
+#### Ansible does the same thing
 
 ```yaml
 # playbooks/nginx1.yml
@@ -824,7 +883,7 @@ docker run -d --name web02 \
 
     - name: Get container facts
       community.docker.current_container_facts:
-    
+
     - name: Show container ID
       ansible.builtin.debug:
         msg: "Container ID: {{ ansible_module_container_id }}"
@@ -881,7 +940,84 @@ nginx_port: 8002
 
 Each host gets its own port.
 
-## Collections
+
+
+
+#### 3. Playbook: `playbook/nginx.yml`
+
+```yaml
+---
+- name: Simple Nginx with Jinja2
+  hosts: linux
+  gather_facts: true
+  vars:
+    container_name: "web02"
+    nginx_port: 8002
+  tasks:
+    - name: Create HTML from template
+      ansible.builtin.template:
+        src: templates/index.html.j2
+        dest: /tmp/index.html
+
+    - name: Create Nginx config from template
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /tmp/default.conf
+
+    - name: Run Nginx container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: nginx:latest
+        state: started
+        ports:
+          - "{{ nginx_port }}:80"
+        volumes:
+          - /tmp/index.html:/usr/share/nginx/html/index.html:ro
+          - /tmp/default.conf:/etc/nginx/conf.d/default.conf:ro
+```
+
+#### 4. Inventory: `inventory/linux.ini`
+
+```ini
+[linux]
+web01 ansible_connection=local
+web02 ansible_connection=local
+
+[linux:vars]
+ansible_python_interpreter=/usr/bin/python3
+```
+
+> `ansible_connection=local` runs directly in WSL (no SSH needed). For remote Linux hosts use `ansible_connection=ssh`.
+
+#### 4. Run and verify
+
+```bash
+ansible-playbook -i inventory/linux.ini playbooks/nginx.yml
+curl http://localhost:8000/
+# Hello from ubuntu01!
+# OS: Debian
+# Container: web01
+# Port: 8000
+```
+
+### Side by side: Windows vs Linux
+
+```text
+Windows (IIS)                          Linux (Nginx)
+┌──────────────────────┐               ┌──────────────────────┐
+│ win_feature          │               │ docker_container     │
+│   name: Web-Server   │               │   image: nginx       │
+│                      │               │   ports: 8000 → 80   │
+│ win_template         │               │ template             │
+│   src: index.html.j2 │               │   src: index.html.j2 │
+│                      │               │                      │
+│ win_service: W3SVC   │               │ (Docker manages)     │
+│                      │               │                      │
+│ Port: 80 (default)   │               │ Port: 8000 (mapped)  │
+└──────────────────────┘               └──────────────────────┘
+```
+
+### Collections: Module vs Plugin vs Role
 
 Collections are like npm packages or pip packages — they bundle related modules, plugins, and roles together.
 
@@ -908,31 +1044,7 @@ roles:
 
 > exploring community docker collection [ansible galaxy docker docs](https://galaxy.ansible.com/ui/repo/published/community/docker/content/module/docker_container/#examples)
 
-```
-ansible-galaxy collection list
-```
-
-> as you can see there are bunch of collections already installed. when we did `pip install ansible`, it install ansible distribution rather than `ansible-core` which is just the engine.
-
-
-**`ansible` (14.3.1)** = `ansible-core` + 80+ collections pre-installed
-**`ansible-core` (2.21.3)** = just the engine, no collections
-
-```yaml
-# requirements.yml
-collections:
-  - name: ansible.windows
-  - name: community.docker
-  - name: azure.azcollection
-```
-
-
-```
-ansible-galaxy collection install -r requirements.yml
-# installs all 3 at once
-```
-
-### Playbook: `playbooks/docker_nginx.yml`
+#### Playbook: `playbooks/docker_nginx.yml`
 
 ```yaml
 ---
@@ -1024,7 +1136,7 @@ ubuntu ansible_connection=local
 web03 ansble_connection=docker
 ```
 
-### 3. Run and verify
+#### 3. Run and verify
 
 ```bash
 ansible-playbook -i inventory/linux.ini playbooks/docker_nginx.yml
@@ -1037,86 +1149,36 @@ curl http://localhost:8001/
 
 
 
-### 3. Playbook: `playbook/nginx.yml`
+```
+ansible-galaxy collection list
+```
+
+> as you can see there are bunch of collections already installed. when we did `pip install ansible`, it install ansible distribution rather than `ansible-core` which is just the engine.
+
+
+**`ansible` (14.3.1)** = `ansible-core` + 80+ collections pre-installed
+**`ansible-core` (2.21.3)** = just the engine, no collections
 
 ```yaml
+# requirements.yml
+collections:
+  - name: ansible.windows
+  - name: community.docker
+  - name: azure.azcollection
+```
+
+
+```
+ansible-galaxy collection install -r requirements.yml
+# installs all 3 at once
+```
+
 ---
-- name: Simple Nginx with Jinja2
-  hosts: linux
-  gather_facts: true
-  vars:
-    container_name: "web02"
-    nginx_port: 8002
-  tasks:
-    - name: Create HTML from template
-      ansible.builtin.template:
-        src: templates/index.html.j2
-        dest: /tmp/index.html
 
-    - name: Create Nginx config from template
-      ansible.builtin.template:
-        src: templates/nginx.conf.j2
-        dest: /tmp/default.conf
+## Section 10 — Guestbook App: PHP + IIS + SQLite
 
-    - name: Run Nginx container
-      community.docker.docker_container:
-        name: "{{ container_name }}"
-        image: nginx:latest
-        state: started
-        ports:
-          - "{{ nginx_port }}:80"
-        volumes:
-          - /tmp/index.html:/usr/share/nginx/html/index.html:ro
-          - /tmp/default.conf:/etc/nginx/conf.d/default.conf:ro
-```
+### The Application: Student Guestbook
 
-### 4. Inventory: `inventory/linux.ini`
-
-```ini
-[linux]
-web01 ansible_connection=local
-web02 ansible_connection=local
-
-[linux:vars]
-ansible_python_interpreter=/usr/bin/python3
-```
-
-> `ansible_connection=local` runs directly in WSL (no SSH needed). For remote Linux hosts use `ansible_connection=ssh`.
-
-### 4. Run and verify
-
-```bash
-ansible-playbook -i inventory/linux.ini playbooks/nginx.yml 
-curl http://localhost:8000/
-# Hello from ubuntu01!
-# OS: Debian
-# Container: web01
-# Port: 8000
-```
-
-### Side by side: Windows vs Linux
-
-```text
-Windows (IIS)                          Linux (Nginx)
-┌──────────────────────┐               ┌──────────────────────┐
-│ win_feature          │               │ docker_container     │
-│   name: Web-Server   │               │   image: nginx       │
-│                      │               │   ports: 8000 → 80   │
-│ win_template         │               │ template             │
-│   src: index.html.j2 │               │   src: index.html.j2 │
-│                      │               │                      │
-│ win_service: W3SVC   │               │ (Docker manages)     │
-│                      │               │                      │
-│ Port: 80 (default)   │               │ Port: 8000 (mapped)  │
-└──────────────────────┘               └──────────────────────┘
-```
-
-
-### The application: Student Guestbook
-
-```text
-Browser → IIS → PHP → SQLite
-```
 ```
 Install PHP
     ↓
@@ -1135,7 +1197,7 @@ Deploy PHP application
 Restart IIS if required
 ```
 
-```ansible/host_vars/student01.yml
+```ansible/host_vars/winvm01.yml
 ---
 ---
 # IIS site configuration
@@ -1145,6 +1207,7 @@ application_path: "C:\\apps\\training"
 # PHP configuration (Chocolatey installs to C:\\tools\\php)
 php_dir: "C:\\tools\\php"
 php_cgi_path: "C:\\tools\\php\\php-cgi.exe"
+php_path: "C:\\tools\\php85\\php-cgi.exe"
 
 # PHP guestbook app
 application_name: "Guestbook - DEV"
@@ -1165,10 +1228,6 @@ and deploys a simple PHP application.
 - name: Setup IIS with PHP and SQLite
   hosts: windows
   gather_facts: false
-
-  vars:
-    php_path: 'C:\tools\php85\php-cgi.exe'
-
   tasks:
 
     # -------------------------------------------------
@@ -1369,7 +1428,7 @@ Same two templates → four rendered files (`web.config` + `index.php` + `config
 
 ---
 
-## PHASE 10 — Roles + Handlers (Guide §52-57)
+## Section 11 — Roles + Handlers 
 
 ```bash
 ansible-galaxy role init ansible/roles/php_iis
@@ -1416,58 +1475,118 @@ roles/
 
 Step 1 — `roles/php_iis/defaults/main.yml` (variables with defaults):
 ```yaml
----
-iis_site_name: "TrainingSite"
-application_path: "C:\\apps\\training"
-application_name: "Guestbook"
-environment: "development"
-database_path: "C:\\apps\\training\\database.sqlite"
+
+
+<copy from ansible/host_vars/winvm01.yml>
+
 ```
 
 Step 2 — `roles/php_iis/tasks/main.yml` (tasks from playbook):
 ```yaml
 ---
-- name: Install IIS
-  ansible.windows.win_feature:
-    name: Web-Server
-    state: present
+# -------------------------------------------------
+# PHP
+# -------------------------------------------------
 
-- name: Install CGI feature
-  ansible.windows.win_feature:
-    name: Web-CGI
-    state: present
-
+# Installs PHP using the Chocolatey package manager.
 - name: Install PHP
   chocolatey.chocolatey.win_chocolatey:
     name: php
     state: present
 
+# Enables the IIS CGI feature required to run PHP through FastCGI.
+- name: Enable IIS CGI
+  ansible.windows.win_feature:
+    name: Web-CGI
+    state: present
+
+# -------------------------------------------------
+# Application directory
+# -------------------------------------------------
+# Creates the directory where the PHP application will be hosted.
+- name: Create application directory
+  ansible.windows.win_file:
+    path: "{{ application_path }}"
+    state: directory
+
+# -------------------------------------------------
+# IIS
+# -------------------------------------------------
+# Removes the default IIS website so port 80 can be used by our application.
+- name: Remove Default Web Site
+  microsoft.iis.website:
+    name: "Default Web Site"
+    state: absent
+
+# Creates our IIS website and points it to the application directory.
+- name: Create application website
+  microsoft.iis.website:
+    name: "{{ iis_site_name }}"
+    physical_path: "{{ application_path }}"
+    state: started
+    bindings:
+      set:
+        - ip: "*"
+          port: 80
+
+# -------------------------------------------------
+# PHP FastCGI
+# -------------------------------------------------
+# Adds PHP to IIS FastCGI so IIS knows how to execute .php files.
+- name: Register PHP FastCGI
+  community.windows.win_xml:
+    path: 'C:\Windows\System32\inetsrv\config\applicationHost.config'
+    xpath: /configuration/system.webServer/fastCgi
+    fragment: '<application fullPath="{{ php_path }}" maxInstances="4" instanceMaxRequests="10000" />'
+    state: present
+
+# -------------------------------------------------
+# SQLite
+# -------------------------------------------------
+# Iterates over the PHP configuration and uncomment/enables the SQLite
+# extensions required by the application.
+- name: Enable PHP SQLite extensions
+  community.windows.win_lineinfile:
+    path: C:\tools\php85\php.ini
+    regex: '^;?extension={{ item }}$'
+    line: 'extension={{ item }}'
+  loop:
+    - pdo_sqlite
+    - sqlite3
+  notify: Restart IIS
+
+# -------------------------------------------------
+# Application
+# -------------------------------------------------
+# Generates web.config from a Jinja2 template.
+# This config tells IIS how to handle PHP requests.
 - name: Deploy web.config
   ansible.windows.win_template:
     src: web.config.j2
-    dest: "{{ application_path }}\\web.config"
+    dest: "{{ application_path }}\web.config"
+  when:
+    - app_environment == "development"
+    #- confirm_deploy | default(false) | bool
 
-- name: Deploy index.php
-  ansible.windows.win_template:
-    src: index.php.j2
-    dest: "{{ application_path }}\\index.php"
-
-- name: Deploy config.php
-  ansible.windows.win_template:
-    src: config.php.j2
-    dest: "{{ application_path }}\\config.php"
-
+# Copies the static database.php file to the IIS application directory.
 - name: Deploy database.php
   ansible.windows.win_copy:
     src: database.php
-    dest: "{{ application_path }}\\database.php"
+    dest: "{{ application_path }}\database.php"
 
-- name: Register PHP with IIS
-  community.windows.win_iis_webapplication:
-    name: "{{ iis_site_name }}"
-    site: "{{ iis_site_name }}"
-    physical_path: "{{ application_path }}"
-  notify: restart IIS
+# Generates index.php from a Jinja2 template.
+# Ansible variables can be inserted into the PHP file.
+- name: Deploy index.php
+  ansible.windows.win_template:
+    src: index.php.j2
+    dest: "{{ application_path }}\index.php"
+
+# Generates the application configuration from a Jinja2 template.
+- name: Deploy application config
+  ansible.windows.win_template:
+    src: config.php.j2
+    dest: "{{ application_path }}\config.php"
+
 ```
 
 Step 3 — `roles/php_iis/handlers/main.yml`:
@@ -1528,15 +1647,15 @@ dependency:
 driver:
   name: delegated
 platforms:
-  - name: student01
+  - name: winvm01
     managed: false
 provisioner:
   name: ansible
   inventory:
     hosts:
-      student01:
+      winvm01:
         ansible_host: 40.81.225.81
-        ansible_user: wakizu
+        ansible_user: aaditya
         ansible_connection: psrp
         ansible_psrp_port: 5986
         ansible_psrp_cert_validation: false
@@ -1548,7 +1667,7 @@ verifier:
 # roles/php_iis/molecule/default/verify.yml
 ---
 - name: Verify IIS
-  hosts: student01
+  hosts: winvm01
   tasks:
     - name: IIS service is running
       ansible.windows.win_service_info:
@@ -1581,11 +1700,11 @@ molecule destroy    # cleans up
 
 ---
 
-## PHASE 11 — Azure Dynamic Inventory (optional)
+## Section 12 — Azure Dynamic Inventory (optional)
 
 Tag VMs:
 ```bash
-az vm update -g ansible-student01-rg -n ansible-student01-vm \
+az vm update -g ansible-winvm01-rg -n ansible-winvm01-vm \
   --set tags.Role=web tags.Environment=development tags.Application=training-iis
 ```
 
@@ -1595,7 +1714,7 @@ az vm update -g ansible-student01-rg -n ansible-student01-vm \
 plugin: azure.azcollection.azure_rm
 auth_source: cli
 include_vm_resource_groups:
-  - ansible-student01-rg
+  - ansible-winvm01-rg
 conditional_groups:
   web: "'web' == (tags.Role | default(''))"
   database: "'database' == (tags.Role | default(''))"
@@ -1611,7 +1730,7 @@ conditional_groups:
 
 ```bash
 ansible-inventory -i ansible/inventory/azure_rm.yml --graph
-# @all: |--@web: |  |--student01
+# @all: |--@web: |  |--winvm01
 ansible -i ansible/inventory/azure_rm.yml web -m ansible.windows.win_ping
 ansible-playbook -i ansible/inventory/azure_rm.yml ansible/playbooks/site.yml --ask-vault-pass -l "web:&development"
 ```
@@ -1622,7 +1741,7 @@ No more editing `windows.ini` when IPs change. **Tags become inventory.**
 
 ---
 
-## PHASE 13 — CI/CD (optional)
+## Section 13 — CI/CD (optional)
 
 `azure-pipelines.yml`:
 ```yaml
@@ -1686,14 +1805,14 @@ stages:
 
 
 
-## Collections Explained
+## Reference: Collections Used
 
 | Collection | Purpose | Key Plugins |
 |------------|---------|-------------|
 | `ansible.windows` | Windows modules | `win_feature`, `win_service`, `win_copy`, `win_template`, `win_ping`, `win_file` |
 | `community.windows` | Extra Windows | `win_iis_website`, `win_firewall_rule`, `win_reboot` |
 | `azure.azcollection` | Azure integration | `azure_rm` inventory, `azure_rm_virtualmachine` module |
-| `chocolatey.chocolatey` | Windows package installs | `win_chocolatey` — used in PHASE 9/10 to install PHP |
+| `chocolatey.chocolatey` | Windows package installs | `win_chocolatey` — used in Section 10 to install PHP |
 | `ansible.posix` | Linux basics | `firewalld`, `selinux`, `synchronize` |
 
 Install via `requirements.yml`:
