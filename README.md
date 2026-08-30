@@ -344,7 +344,28 @@ ansible-playbook \
 
 > Facts=information Ansible discovers about the managed machine
 
+## `ansible.cfg`
 
+Ansible reads `ansible.cfg` from the working directory (or `~/.ansible.cfg`, `/etc/ansible/ansible.cfg`). It sets defaults so you don't pass flags every time.
+
+```ini
+# ansible/ansible.cfg
+[defaults]
+inventory = inventory/all.ini
+interpreter_python = /usr/bin/python3
+remote_tmp = /tmp/.ansible/tmp
+gathering = smart
+fact_caching = memory
+
+[privilege_escalation]
+become = false
+```
+
+- `inventory` — default inventory, skip `-i` flag
+- `interpreter_python` — lock Python path, kill `[WARNING] discovered interpreter` 
+- `remote_tmp` — fix `/tmp` issues on minimal containers
+- `gathering = smart` — cache facts, only re-gather when host changes
+- `gathering = explicit` — **never gather unless playbook says `gather_facts: true`** — saves time when you don't need OS info
 
 
 ---
@@ -577,7 +598,7 @@ ansible_user=wakizu
 # group_vars/windows/vault.yml (encrypted)
 ---
 ansible_password: "!BRr39E,BAPUWq"
-app_db_password: "SuperSecret123"
+#app_db_password: "SuperSecret123"
 ```
 
 ```bash
@@ -589,6 +610,33 @@ ansible-playbook -i inventory/windows.ini playbooks/iis.yml --ask-vault-pass
 ```
 
 > `ansible_password` is just a variable like any other — Ansible reads it from vault. Git now sees only the encrypted file.
+
+instead of `--ask-vault-pass` every time you can do
+
+```
+# ansible.cfg
+[defaults]
+vault_password_file = ~/.ansible-vault-password
+```
+
+```
+# create vault password file
+echo "MyVaultPass123" > ~/.ansible-vault-password
+chmod 600 ~/.ansible-vault-password
+```
+
+```
+# now run without --ask-vault-pass
+ansible-playbook -i inventory/windows.ini playbooks/iis.yml
+```
+
+### another opption: env var (best for CI/CD)
+
+```
+export VAULT_PASSWORD_FILE=~/.ansible-vault-password
+ansible-playbook -i inventory/windows.ini playbooks/iis.yml
+# vault password is read automatically
+```
 
 ---
 
@@ -686,15 +734,7 @@ Date: 2026-08-29
         state: started
 ```
 
-### 3. Run and verify
 
-```bash
-ansible-playbook -i inventory/windows.ini playbooks/simple_iis.yml
-curl http://<VM_PUBLIC_IP>/
-# Hello from student01!
-# OS: Windows
-# Environment: development
-```
 
 
 
@@ -713,10 +753,329 @@ sequenceDiagram
     A->>A: 6. curl http://VM_IP → get page
 ```
 
-
 ---
 
-## PHASE 9 — Guestbook App: PHP + IIS + Jinja2 
+## Docker + Nginx + Jinja2 example
+
+### 1. Template: `templates/nginx.conf.j2`
+
+```nginx
+server {
+    listen 80;
+    server_name {{ inventory_hostname }};
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html;
+    }
+}
+```
+### 2. Template: `templates/index.html.j2`
+
+```html
+<html>
+<body>
+<h1>Hello from {{ inventory_hostname }}!</h1>
+<p>OS: {{ ansible_os_family }}</p>
+<p>Container: {{ container_name }}</p>
+<h3>Port: {{ nginx_port }}</h3>
+<h3>Greetings: {{ greeting }} </h3>
+</body>
+</html>
+```
+
+# Spin up container
+```
+docker run -d --name web01 \
+  -p 8001:80 \
+  ubuntu:22.04 sleep infinity
+```
+```
+docker run -d --name web02 \
+  -p 8002:80 \
+  ubuntu:22.04 sleep infinity
+```
+
+> docker exec web01 bash -c "apt-get update && apt-get install -y nginx && nginx"
+> you would manually configure this above and write nginx config manually
+
+
+
+
+
+
+### Ansible does the same thing
+
+```yaml
+# playbooks/nginx1.yml
+---
+- name: Docker + Nginx with Jinja2
+  hosts: web01
+  gather_facts: true
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Render nginx.conf from template
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/default
+
+    - name: Render index.html from template
+      ansible.builtin.template:
+        src: templates/index.html.j2
+        dest: /usr/share/nginx/html/index.html
+
+    - name: Start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started
+
+    - name: Verify nginx is running
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nginx_port }}/"
+        status_code: 200
+```
+
+> Add to `inventory/linux.ini`:
+```ini
+[linux]
+web01 ansible_connection=docker ansible_python_interpreter=/usr/bin/python3
+web02 ansible_connection=docker ansible_python_interpreter=/usr/bin/python3
+```
+
+# group_vars (same port for all containers)
+
+```yaml
+# group_vars/linux.yml
+---
+greeting: "hello from group_vars"
+```
+
+All hosts in `[linux]` group get `nginx_port: 8000`.
+
+host_vars (different port per container)
+
+```yaml
+# host_vars/web01.yml
+---
+nginx_port: 8001
+```
+
+```yaml
+# host_vars/web02.yml
+---
+nginx_port: 8002
+```
+
+Each host gets its own port.
+
+## Collections
+
+Collections are like npm packages or pip packages — they bundle related modules, plugins, and roles together.
+
+# MODULE — runs on the target, does the work
+tasks:
+  - ansible.windows.win_feature:        # module
+      name: Web-Server
+      state: present
+
+# PLUGIN — extends Ansible (connection, inventory, etc.)
+[defaults]
+gathering = smart          # fact gathering plugin
+inventory = azure_rm.yml   # inventory plugin
+
+# ROLE — packages everything together
+roles:
+  - iis                    # contains tasks, templates, handlers
+
+
+**One-liner:**
+- **Module** = "install nginx on the target"
+- **Plugin** = "how Ansible connects to the target" or "how Ansible finds targets"
+- **Role** = "a bundle of modules + templates + logic that configures a service"
+
+> exploring community docker collection [ansible galaxy docker docs](https://galaxy.ansible.com/ui/repo/published/community/docker/content/module/docker_container/#examples)
+
+```
+ansible-galaxy collection list
+```
+
+> as you can see there are bunch of collections already installed. when we did `pip install ansible`, it install ansible distribution rather than `ansible-core` which is just the engine.
+
+
+**`ansible` (14.3.1)** = `ansible-core` + 80+ collections pre-installed
+**`ansible-core` (2.21.3)** = just the engine, no collections
+
+```yaml
+# requirements.yml
+collections:
+  - name: ansible.windows
+  - name: community.docker
+  - name: azure.azcollection
+```
+
+
+```
+ansible-galaxy collection install -r requirements.yml
+# installs all 3 at once
+```
+
+### Playbook: `playbooks/docker_nginx.yml`
+
+```yaml
+---
+- name: Docker + Nginx with Jinja2
+  hosts: linux
+  gather_facts: true
+  vars:
+    container_name: "web01"
+    nginx_port: 8001
+  tasks:
+    - name: Create temp dir for nginx files
+      ansible.builtin.file:
+        path: /tmp/nginx/{{ container_name }}
+        state: directory
+
+    - name: Render nginx.conf from template
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /tmp/nginx/{{ container_name }}/default.conf
+
+    - name: Render index.html from template
+      ansible.builtin.template:
+        src: templates/index.html.j2
+        dest: /tmp/nginx/{{ container_name }}/index.html
+
+    - name: Spin up Ubuntu container with Python
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: ubuntu:22.04
+        state: started
+        command: sleep infinity
+        expose:
+          - "80"
+        ports:
+          - "{{ nginx_port }}:80"
+        volumes:
+          - /tmp/nginx/{{ container_name }}/default.conf:/etc/nginx/sites-available/default:ro
+          - /tmp/nginx/{{ container_name }}/index.html:/usr/share/nginx/html/index.html:ro
+
+    - name: Install nginx inside container
+      ansible.builtin.command: docker exec {{ container_name }} bash -c "apt-get update && apt-get install -y nginx && nginx"
+
+    - name: Verify nginx is running
+      ansible.builtin.uri:
+        url: "http://localhost:{{ nginx_port }}/"
+        status_code: 200
+      register: result
+
+    - name: Show response
+      ansible.builtin.debug:
+        msg: "Nginx is running on port {{ nginx_port }} - Status: {{ result.status }}"
+```
+
+write inventory file
+```
+[linux]
+ubuntu01 ansible_connection=local
+
+[linux:vars]
+ansible_python_interpreter=/usr/bin/python3
+```
+
+### 3. Run and verify
+
+```bash
+ansible-playbook -i inventory/linux.ini playbooks/docker_nginx.yml
+curl http://localhost:8001/
+# Hello from ubuntu01!
+# OS: Debian
+# Container: web01
+# Port: 8001
+```
+
+
+
+### 3. Playbook: `playbook/nginx.yml`
+
+```yaml
+---
+- name: Simple Nginx with Jinja2
+  hosts: linux
+  gather_facts: true
+  vars:
+    container_name: "web02"
+    nginx_port: 8002
+  tasks:
+    - name: Create HTML from template
+      ansible.builtin.template:
+        src: templates/index.html.j2
+        dest: /tmp/index.html
+
+    - name: Create Nginx config from template
+      ansible.builtin.template:
+        src: templates/nginx.conf.j2
+        dest: /tmp/default.conf
+
+    - name: Run Nginx container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: nginx:latest
+        state: started
+        ports:
+          - "{{ nginx_port }}:80"
+        volumes:
+          - /tmp/index.html:/usr/share/nginx/html/index.html:ro
+          - /tmp/default.conf:/etc/nginx/conf.d/default.conf:ro
+```
+
+### 4. Inventory: `inventory/linux.ini`
+
+```ini
+[linux]
+web01 ansible_connection=local
+web02 ansible_connection=local
+
+[linux:vars]
+ansible_python_interpreter=/usr/bin/python3
+```
+
+> `ansible_connection=local` runs directly in WSL (no SSH needed). For remote Linux hosts use `ansible_connection=ssh`.
+
+### 4. Run and verify
+
+```bash
+ansible-playbook -i inventory/linux.ini playbooks/nginx.yml 
+curl http://localhost:8000/
+# Hello from ubuntu01!
+# OS: Debian
+# Container: web01
+# Port: 8000
+```
+
+### Side by side: Windows vs Linux
+
+```text
+Windows (IIS)                          Linux (Nginx)
+┌──────────────────────┐               ┌──────────────────────┐
+│ win_feature          │               │ docker_container     │
+│   name: Web-Server   │               │   image: nginx       │
+│                      │               │   ports: 8000 → 80   │
+│ win_template         │               │ template             │
+│   src: index.html.j2 │               │   src: index.html.j2 │
+│                      │               │                      │
+│ win_service: W3SVC   │               │ (Docker manages)     │
+│                      │               │                      │
+│ Port: 80 (default)   │               │ Port: 8000 (mapped)  │
+└──────────────────────┘               └──────────────────────┘
+```
 
 
 ### The application: Student Guestbook
@@ -727,9 +1086,19 @@ Browser → IIS → PHP → SQLite
 
 A one-page app: a form (name + message), saved to SQLite, listed below the form. Deliberately minimal — no ORM, no build step, one dependency (PHP), one file (`database.sqlite`) instead of a database server.
 
+```ansible/host_vars/student01.yml
+---
+# IIS site configuration
+iis_site_name: "TrainingSite"
+application_path: "C:\\apps\\training"
+
+# PHP guestbook app
+application_name: "Guestbook - DEV"
+environment: "development"
+database_path: "C:\\apps\\training\\database.sqlite"
+```
 
 
-Deploy layout (source lives in `ansible/roles/iis/files/guestbook/` for now; moves into the role in PHASE 10):
 ```text
 guestbook/
 ├── index.php.j2      # templated — title comes from Ansible vars
@@ -751,7 +1120,7 @@ guestbook/
     state: present
 
 - name: Register PHP with IIS FastCGI
-  community.windows.win_iis_webapplication:   # or a raw appcmd task if this module isn't available
+  community.windows.win_iis_webapplication: 
     name: "{{ iis_site_name }}"
     site: "{{ iis_site_name }}"
     physical_path: "{{ application_path }}"
