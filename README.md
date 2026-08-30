@@ -644,6 +644,75 @@ Date: 2026-08-29
 
 > **Rule:** Put logic in variables, not templates. Keep templates simple.
 
+---
+
+## Simplest IIS + Jinja2 example
+
+### 1. Template: `templates/index.html.j2`
+
+```html
+<html>
+<body>
+<h1>Hello from {{ inventory_hostname }}!</h1>
+<p>OS: {{ ansible_os_family }}</p>
+<p>Environment: {{ environment }}</p>
+</body>
+</html>
+```
+
+### 2. Playbook: `playbooks/simple_iis.yml`
+
+```yaml
+---
+- name: Simple IIS with Jinja2
+  hosts: windows
+  gather_facts: true
+  vars:
+    environment: "development"
+  tasks:
+    - name: Install IIS
+      ansible.windows.win_feature:
+        name: Web-Server
+        state: present
+
+    - name: Create index.html from template
+      ansible.windows.win_template:
+        src: templates/index.html.j2
+        dest: C:\inetpub\wwwroot\index.html
+
+    - name: Ensure IIS is running
+      ansible.windows.win_service:
+        name: W3SVC
+        state: started
+```
+
+### 3. Run and verify
+
+```bash
+ansible-playbook -i inventory/windows.ini playbooks/simple_iis.yml
+curl http://<VM_PUBLIC_IP>/
+# Hello from student01!
+# OS: Windows
+# Environment: development
+```
+
+
+
+### What just happened?
+
+```mermaid
+sequenceDiagram
+    participant A as Ansible (WSL)
+    participant V as Windows VM
+
+    A->>V: 1. Install Web-Server feature
+    A->>A: 2. Render index.html.j2 → insert OS, env, hostname
+    A->>V: 3. Copy rendered index.html to C:\inetpub\wwwroot\
+    A->>V: 4. Start W3SVC service
+    V->>V: 5. Serve index.html on port 80
+    A->>A: 6. curl http://VM_IP → get page
+```
+
 
 ---
 
