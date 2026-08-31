@@ -15,8 +15,7 @@ What you'll build, in order: a Windows host in Azure (Terraform) → a working A
 | 9 | [Jinja2 Templating](#section-9--jinja2-templating) | Basics, IIS + Docker/Nginx examples, collections |
 | 10 | [Guestbook App](#section-10--guestbook-app-php--iis--sqlite) | Real PHP + IIS + SQLite deployment |
 | 11 | [Roles + Handlers](#section-11--roles--handlers-guide-52-57) | Converting the app into a role |
-| 12 | [Dynamic Inventory](#section-12--azure-dynamic-inventory-optional) | Azure tags → inventory |
-| 13 | [CI/CD](#section-13--cicd-optional) | Azure DevOps pipeline |
+| 12 | [CI/CD](#section-13--cicd-optional) | Azure DevOps pipeline |
 
 ---
 
@@ -59,6 +58,7 @@ graph TD
 ```bash
 cd terraform
 terraform init && terraform fmt && terraform validate
+terraform import azurerm_resource_group.winrm /subscriptions/89d4fdd2-c376-4dc8-a461-fd467b017bcc/resourceGroups/<your-rg-name>
 terraform plan
 terraform apply
 terraform output
@@ -101,7 +101,7 @@ docker run -d --name ansible-test1 --rm python:3.14.7-bookworm sleep 6000
 sudo apt install -y python3 python3-pip python3-venv git curl jq openssl netcat-openbsd
 python3 -m venv .venv
 source .venv/bin/activate
-pip install ansible==14.3.1 pypsrp==0.9.1
+pip install ansible==14.3.1 pypsrp==0.9.1 "molecule[delegated]" molecule-plugins
 ansible --version
 ```
 
@@ -1309,7 +1309,7 @@ and deploys a simple PHP application.
     - name: Deploy web.config
       ansible.windows.win_template:
         src: ../templates/web.config.j2
-        dest: "{{ application_path }}\web.config"
+        dest: "{{ application_path }}\\web.config"
       when:
         - app_environment == "development"
         #- confirm_deploy | default(false) | bool
@@ -1318,20 +1318,20 @@ and deploys a simple PHP application.
     - name: Deploy database.php
       ansible.windows.win_copy:
         src: ../files/guestbook/database.php
-        dest: "{{ application_path }}\database.php"
+        dest: "{{ application_path }}\\database.php"
 
     # Generates index.php from a Jinja2 template.
     # Ansible variables can be inserted into the PHP file.
     - name: Deploy index.php
       ansible.windows.win_template:
         src: ../templates/index.php.j2
-        dest: "{{ application_path }}\index.php"
+        dest: "{{ application_path }}\\index.php"
 
     # Generates the application configuration from a Jinja2 template.
     - name: Deploy application config
       ansible.windows.win_template:
         src: ../templates/config.php.j2
-        dest: "{{ application_path }}\config.php"
+        dest: "{{ application_path }}\\config.php"
 
   handlers:
 
@@ -1584,7 +1584,7 @@ Step 2 — `roles/php_iis/tasks/main.yml` (tasks from playbook):
 - name: Deploy web.config
   ansible.windows.win_template:
     src: web.config.j2
-    dest: "{{ application_path }}\web.config"
+    dest: "{{ application_path }}\\web.config"
   when:
     - app_environment == "development"
     #- confirm_deploy | default(false) | bool
@@ -1593,20 +1593,20 @@ Step 2 — `roles/php_iis/tasks/main.yml` (tasks from playbook):
 - name: Deploy database.php
   ansible.windows.win_copy:
     src: database.php
-    dest: "{{ application_path }}\database.php"
+    dest: "{{ application_path }}\\database.php"
 
 # Generates index.php from a Jinja2 template.
 # Ansible variables can be inserted into the PHP file.
 - name: Deploy index.php
   ansible.windows.win_template:
     src: index.php.j2
-    dest: "{{ application_path }}\index.php"
+    dest: "{{ application_path }}\\index.php"
 
 # Generates the application configuration from a Jinja2 template.
 - name: Deploy application config
   ansible.windows.win_template:
     src: config.php.j2
-    dest: "{{ application_path }}\config.php"
+    dest: "{{ application_path }}\\config.php"
 
 ```
 
@@ -1629,7 +1629,7 @@ cp files/database.php        roles/php_iis/files/
 
 Step 5 — Playbook becomes one line:
 ```yaml
-# playbooks/site.yml
+# site.yml
 ---
 - name: Deploy PHP app
   hosts: windows
@@ -1658,111 +1658,10 @@ database_path: "C:\\apps\\prod\\database.sqlite"
 
 Same role, different values per host.
 
-### Testing with Molecule (delegated driver)
-
-```yaml
-# roles/php_iis/molecule/default/molecule.yml
----
-dependency:
-  name: galaxy
-driver:
-  name: delegated
-platforms:
-  - name: winvm01
-    managed: false
-provisioner:
-  name: ansible
-  inventory:
-    hosts:
-      winvm01:
-        ansible_host: 40.81.225.81
-        ansible_user: aaditya
-        ansible_connection: psrp
-        ansible_psrp_port: 5986
-        ansible_psrp_cert_validation: false
-verifier:
-  name: ansible
-```
-
-```yaml
-# roles/php_iis/molecule/default/verify.yml
----
-- name: Verify IIS
-  hosts: winvm01
-  tasks:
-    - name: IIS service is running
-      ansible.windows.win_service_info:
-        name: W3SVC
-      register: iis
-
-    - name: Assert IIS running
-      ansible.builtin.assert:
-        that:
-          - iis.services[0].state == "running"
-
-    - name: Site exists
-      community.windows.win_iis_website_info:
-        name: TrainingSite
-      register: site
-
-    - name: Assert site exists
-      ansible.builtin.assert:
-        that:
-          - site.sites | length > 0
-```
-
-```bash
-cd roles/php_iis
-molecule create     # skips container, uses delegated
-molecule converge   # runs role on Azure VM
-molecule verify     # runs verification
-molecule destroy    # cleans up
-```
 
 ---
 
-## Section 12 — Azure Dynamic Inventory (optional)
-
-Tag VMs:
-```bash
-az vm update -g ansible-winvm01-rg -n ansible-winvm01-vm \
-  --set tags.Role=web tags.Environment=development tags.Application=training-iis
-```
-
-`inventory/azure_rm.yml`:
-```yaml
----
-plugin: azure.azcollection.azure_rm
-auth_source: cli
-include_vm_resource_groups:
-  - ansible-winvm01-rg
-conditional_groups:
-  web: "'web' == (tags.Role | default(''))"
-  database: "'database' == (tags.Role | default(''))"
-  development: "'development' == (tags.Environment | default(''))"
-  production: "'production' == (tags.Environment | default(''))"
-# OR keyed_groups:
-# keyed_groups:
-#   - prefix: role
-#     key: tags.Role
-#   - prefix: environment
-#     key: tags.Environment
-```
-
-```bash
-ansible-inventory -i inventory/azure_rm.yml --graph
-# @all: |--@web: |  |--winvm01
-ansible -i inventory/azure_rm.yml web -m ansible.windows.win_ping
-ansible-playbook -i inventory/azure_rm.yml playbooks/site.yml --ask-vault-pass -l "web:&development"
-```
-
-No more editing `windows.ini` when IPs change. **Tags become inventory.**
-
----
-
----
-
-## Section 13 — CI/CD (optional)
+## Section 12 — CI/CD (optional)
 
 `azure-pipelines.yml`:
 ```yaml
