@@ -1,0 +1,14 @@
+---
+# IIS site configuration
+iis_site_name: "TrainingSite"
+application_path: "C:\\apps\\training"
+
+# PHP configuration (Chocolatey installs to C:\\tools\\php)
+php_dir: "C:\\tools\\php"
+php_cgi_path: "C:\\tools\\php\\php-cgi.exe"
+php_path: "C:\\tools\\php85\\php-cgi.exe"
+
+# PHP guestbook app
+application_name: "Guestbook - DEV"
+app_environment: "development"
+database_path: "C:\\apps\\training\\database.sqlite"

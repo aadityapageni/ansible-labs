@@ -1,0 +1,39 @@
+<?php
+require_once 'database.php';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $name = trim($_POST['name'] ?? '');
+    $message = trim($_POST['message'] ?? '');
+    if ($name !== '' && $message !== '') {
+        $stmt = $db->prepare("INSERT INTO messages (name, message) VALUES (:name, :message)");
+        $stmt->execute([':name' => $name, ':message' => $message]);
+    }
+    header('Location: /');
+    exit;
+}
+
+$stmt = $db->query("SELECT name, message, created_at FROM messages ORDER BY id DESC");
+$messages = $stmt->fetchAll(PDO::FETCH_ASSOC);
+?>
+<!DOCTYPE html>
+<html>
+<head><title>{{ application_name }}</title></head>
+<body>
+<h1>{{ application_name }} <small>({{ environment }})</small></h1>
+
+<form method="POST">
+    <label>Name</label><input type="text" name="name" required>
+    <label>Message</label><textarea name="message" rows="4" required></textarea>
+    <button type="submit">Submit</button>
+</form>
+
+<h2>Messages</h2>
+<?php foreach ($messages as $row): ?>
+    <div class="message">
+        <div class="name"><?= htmlspecialchars($row['name']) ?></div>
+        <p><?= htmlspecialchars($row['message']) ?></p>
+        <div class="date"><?= htmlspecialchars($row['created_at']) ?></div>
+    </div>
+<?php endforeach; ?>
+</body>
+</html>

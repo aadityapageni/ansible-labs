@@ -1,0 +1,103 @@
+---
+# -------------------------------------------------
+# PHP
+# -------------------------------------------------
+
+# Installs PHP using the Chocolatey package manager.
+- name: Install PHP
+  chocolatey.chocolatey.win_chocolatey:
+    name: php
+    state: present
+
+# Enables the IIS CGI feature required to run PHP through FastCGI.
+- name: Enable IIS CGI
+  ansible.windows.win_feature:
+    name: Web-CGI
+    state: present
+
+# -------------------------------------------------
+# Application directory
+# -------------------------------------------------
+# Creates the directory where the PHP application will be hosted.
+- name: Create application directory
+  ansible.windows.win_file:
+    path: "{{ application_path }}"
+    state: directory
+
+# -------------------------------------------------
+# IIS
+# -------------------------------------------------
+# Removes the default IIS website so port 80 can be used by our application.
+- name: Remove Default Web Site
+  microsoft.iis.website:
+    name: "Default Web Site"
+    state: absent
+
+# Creates our IIS website and points it to the application directory.
+- name: Create application website
+  microsoft.iis.website:
+    name: "{{ iis_site_name }}"
+    physical_path: "{{ application_path }}"
+    state: started
+    bindings:
+      set:
+        - ip: "*"
+          port: 80
+
+# -------------------------------------------------
+# PHP FastCGI
+# -------------------------------------------------
+# Adds PHP to IIS FastCGI so IIS knows how to execute .php files.
+- name: Register PHP FastCGI
+  community.windows.win_xml:
+    path: 'C:\Windows\System32\inetsrv\config\applicationHost.config'
+    xpath: /configuration/system.webServer/fastCgi
+    fragment: '<application fullPath="{{ php_path }}" maxInstances="4" instanceMaxRequests="10000" />'
+    state: present
+
+# -------------------------------------------------
+# SQLite
+# -------------------------------------------------
+# Iterates over the PHP configuration and uncomment/enables the SQLite
+# extensions required by the application.
+- name: Enable PHP SQLite extensions
+  community.windows.win_lineinfile:
+    path: C:\tools\php85\php.ini
+    regex: '^;?extension={{ item }}$'
+    line: 'extension={{ item }}'
+  loop:
+    - pdo_sqlite
+    - sqlite3
+  notify: Restart IIS
+
+# -------------------------------------------------
+# Application
+# -------------------------------------------------
+# Generates web.config from a Jinja2 template.
+# This config tells IIS how to handle PHP requests.
+- name: Deploy web.config
+  ansible.windows.win_template:
+    src: web.config.j2
+    dest: "{{ application_path }}\\web.config"
+  when:
+    - app_environment == "development"
+    #- confirm_deploy | default(false) | bool
+
+# Copies the static database.php file to the IIS application directory.
+- name: Deploy database.php
+  ansible.windows.win_copy:
+    src: database.php
+    dest: "{{ application_path }}\\database.php"
+
+# Generates index.php from a Jinja2 template.
+# Ansible variables can be inserted into the PHP file.
+- name: Deploy index.php
+  ansible.windows.win_template:
+    src: index.php.j2
+    dest: "{{ application_path }}\\index.php"
+
+# Generates the application configuration from a Jinja2 template.
+- name: Deploy application config
+  ansible.windows.win_template:
+    src: config.php.j2
+    dest: "{{ application_path }}\\config.php"

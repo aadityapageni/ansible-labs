@@ -1,0 +1,4 @@
+training_path: C:\apps\training
+department: "Engineering"        
+app_environment: "development"       # for conditional demo
+allowed_users: [aaditya, contoso, admin]  # for loop demo

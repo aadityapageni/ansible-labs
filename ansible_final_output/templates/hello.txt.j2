@@ -1,0 +1,20 @@
+
+Hello {{ ansible_facts['env'].COMPUTERNAME }}!
+
+User: {{ ansible_facts['env'].USERNAME }}          {# Variable: {{ variable }} #}
+User (upper): {{ ansible_facts['env'].USERNAME | upper }}  {# Filter: | upper -> AADITYA #}
+Department: {{ department | default("n/a") }}       {# Default: n/a if undefined #}
+
+{% if environment == "development" %}               {# Conditional #}
+Environment: DEV — debug mode ON
+{% else %}
+Environment: PROD
+{% endif %}
+
+Allowed users:                                     {# Loop #}
+{% for user in allowed_users %}
+- {{ user }}
+{% endfor %}
+
+Host: {{ inventory_hostname }}
+Date: {{ ansible_date_time.date }}

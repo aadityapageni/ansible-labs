@@ -1,0 +1,68 @@
+---
+- name: Create Docker container
+  hosts: ubuntu
+  gather_facts: false
+
+  vars:
+    container_name: "web03"
+    nginx_port: 8003
+
+  tasks:
+    - name: Create temp dir for nginx files
+      ansible.builtin.file:
+        path: "/tmp/nginx/{{ container_name }}"
+        state: directory
+        mode: "0755"
+
+    - name: Render nginx.conf from template
+      ansible.builtin.template:
+        src: ../templates/nginx.conf.j2
+        dest: "/tmp/nginx/{{ container_name }}/default.conf"
+        mode: "0644"
+
+    - name: Render index.html from template
+      ansible.builtin.template:
+        src: ../templates/index.html.j2
+        dest: "/tmp/nginx/{{ container_name }}/index.html"
+        mode: "0644"
+
+    - name: Spin up Ubuntu container with Python
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        image: python:3.14.7-bookworm
+        state: started
+        command: sleep infinity
+        expose:
+          - "80"
+        ports:
+          - "{{ nginx_port }}:80"
+        volumes:
+          - "/tmp/nginx/{{ container_name }}/default.conf:/etc/nginx/sites-available/default:ro"
+          - "/tmp/nginx/{{ container_name }}/index.html:/tmp/index.html:ro"
+
+
+- name: Configure nginx inside container
+  hosts: web03
+  gather_facts: true
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Copy custom index.html
+      ansible.builtin.copy:
+        src: /tmp/index.html
+        dest: /usr/share/nginx/html/index.html
+        remote_src: true
+
+
+    - name: Start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started

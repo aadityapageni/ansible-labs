@@ -1,0 +1,24 @@
+# roles/php_iis/molecule/default/verify.yml
+---
+- name: Verify IIS
+  hosts: winvm01
+  tasks:
+    - name: IIS service is running
+      ansible.windows.win_service_info:
+        name: W3SVC
+      register: iis
+
+    - name: Assert IIS running
+      ansible.builtin.assert:
+        that:
+          - iis.services[0].state == "running"
+
+    - name: Site exists
+      community.windows.win_iis_website_info:
+        name: TrainingSite
+      register: site
+
+    - name: Assert site exists
+      ansible.builtin.assert:
+        that:
+          - site.sites | length > 0

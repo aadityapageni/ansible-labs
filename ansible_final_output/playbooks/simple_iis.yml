@@ -1,0 +1,9 @@
+<html>
+<body>
+<h1>Hello from {{ inventory_hostname }}!</h1>
+<p>OS: {{ ansible_os_family }}</p>
+<p>Container: {{ ansible_module_container_id }}</p>
+<h3>Port: {{ nginx_port }}</h3>
+<h3>Greetings: {{ greeting }} </h3>
+</body>
+</html>

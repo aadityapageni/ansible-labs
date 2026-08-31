@@ -1,0 +1,6 @@
+# playbooks/site.yml
+---
+- name: Deploy PHP app
+  hosts: windows
+  roles:
+    - php_iis

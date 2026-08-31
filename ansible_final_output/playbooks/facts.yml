@@ -1,0 +1,20 @@
+---
+- name: Gather Windows information
+  hosts: windows
+  gather_facts: true
+  tasks:
+    - name: Show Windows hostname
+      ansible.builtin.debug:
+        var: ansible_hostname
+
+    - name: Show OS family
+      ansible.builtin.debug:
+        var: ansible_os_family
+
+    - name: Show operating system
+      ansible.builtin.debug:
+        var: ansible_distribution
+
+    - name: Print all gather_facts
+      ansible.builtin.debug:
+        var: ansible_facts

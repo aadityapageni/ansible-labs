@@ -1,0 +1,37 @@
+# playbooks/nginx1.yml
+---
+- name: Docker + Nginx with Jinja2
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Get container facts
+      community.docker.current_container_facts:
+
+    - name: Show container ID
+      ansible.builtin.debug:
+        msg: "Container ID: {{ ansible_module_container_id }}"
+
+
+    - name: Render nginx.conf from template
+      ansible.builtin.template:
+        src: ../templates/nginx.conf.j2
+        dest: /etc/nginx/sites-available/default
+
+    - name: Render index.html from template
+      ansible.builtin.template:
+        src: ../templates/index.html.j2
+        dest: /usr/share/nginx/html/index.html
+
+    - name: Start nginx
+      ansible.builtin.service:
+        name: nginx
+        state: started

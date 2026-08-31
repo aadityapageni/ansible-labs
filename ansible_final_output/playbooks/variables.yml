@@ -1,0 +1,13 @@
+---
+- name: Variable demonstration
+  hosts: windows
+  vars:
+    application_name: "Training IIS Application"
+    application_port: 8080
+  tasks:
+    - name: display app name
+      debug:
+        msg: "Application: {{ application_name }}"
+    - name: display container port
+      debug:
+        msg: "Application port: {{ application_port }}"

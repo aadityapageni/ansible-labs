@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <httpErrors errorMode="Detailed" />
+    <handlers>
+      <add name="PHP_via_FastCGI"
+           path="*.php"
+           verb="GET,HEAD,POST"
+           modules="FastCgiModule"
+           scriptProcessor="C:\tools\php85\php-cgi.exe"
+           resourceType="Either" />
+    </handlers>
+    <defaultDocument enabled="true">
+      <files>
+        <add value="index.php" />
+      </files>
+    </defaultDocument>
+  </system.webServer>
+</configuration>

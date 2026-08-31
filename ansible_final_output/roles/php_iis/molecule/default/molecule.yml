@@ -1,0 +1,21 @@
+# roles/php_iis/molecule/default/molecule.yml
+---
+dependency:
+  name: galaxy
+driver:
+  name: delegated
+platforms:
+  - name: winvm01
+    managed: false
+provisioner:
+  name: ansible
+  inventory:
+    hosts:
+      winvm01:
+        ansible_host: 40.81.225.81
+        ansible_user: aaditya
+        ansible_connection: psrp
+        ansible_psrp_port: 5986
+        ansible_psrp_cert_validation: false
+verifier:
+  name: ansible

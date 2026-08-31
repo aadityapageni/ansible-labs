@@ -1,9 +1,0 @@
----
-# IIS site configuration
-iis_site_name: "TrainingSite"
-application_path: "C:\\apps\\training"
-
-# PHP guestbook app
-application_name: "Guestbook - DEV"
-environment: "development"
-database_path: "C:\\apps\\training\\database.sqlite"
